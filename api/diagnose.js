@@ -104,7 +104,7 @@ function buildSoloPrompt(d) {
   return `あなたはバイオリズムと四柱推命に精通した個人運勢診断の専門家です。
 
 ## 対象者
-- ${d.name}：${d.birthA}生まれ、${d.genderA === "female" ? "女性" : "男性"}${d.timeA ? "、出生時間 " + d.timeA : ""}
+- ${d.name}：${d.birthA}生まれ${d.genderA ? "、" + (d.genderA === "female" ? "女性" : "男性") : ""}${d.timeA ? "、出生時間 " + d.timeA : ""}
 
 ## 判定日: ${d.judgeDateStr}
 
@@ -140,8 +140,8 @@ function buildPairPrompt(d) {
   return `あなたはバイオリズムと四柱推命の両方に精通した相性診断の専門家です。
 
 ## 入力情報
-- ${d.nameA}：${d.birthA}生まれ、${d.genderA === "female" ? "女性" : "男性"}${d.timeA ? "、出生時間 " + d.timeA : ""}
-- ${d.nameB}：${d.birthB}生まれ、${d.genderB === "female" ? "女性" : "男性"}${d.timeB ? "、出生時間 " + d.timeB : ""}
+- ${d.nameA}：${d.birthA}生まれ${d.genderA ? "、" + (d.genderA === "female" ? "女性" : "男性") : ""}${d.timeA ? "、出生時間 " + d.timeA : ""}
+- ${d.nameB}：${d.birthB}生まれ${d.genderB ? "、" + (d.genderB === "female" ? "女性" : "男性") : ""}${d.timeB ? "、出生時間 " + d.timeB : ""}
 
 ## バイオリズム相性（判定日: ${d.judgeDateStr}）
 - 身体: ${d.physical}%　感情: ${d.emotional}%　知性: ${d.intellectual}%
