@@ -80,39 +80,71 @@ export default async function handler(req, res) {
 
 親しみやすく、前向きなトーンで書いてください。占いのような断定ではなく、あくまでバイオリズムに基づく参考情報として伝えてください。`;
 
+  // ---------- Gemini API 呼び出し（リトライ付き） ----------
+  // モデルの優先順位: gemini-2.5-flash → gemini-2.0-flash（フォールバック）
+  const models = ["gemini-2.5-flash", "gemini-2.0-flash"];
+  const MAX_RETRIES = 2;
+
   try {
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+    let lastError = null;
 
-    const geminiRes = await fetch(geminiUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.8,
-          maxOutputTokens: 1024,
-        },
-      }),
-    });
+    for (const model of models) {
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
 
-    if (!geminiRes.ok) {
-      const errBody = await geminiRes.text();
-      console.error("Gemini API error:", errBody);
-      return res.status(502).json({ error: "AI APIからのエラー: " + geminiRes.status });
+          const geminiRes = await fetch(geminiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.8,
+                maxOutputTokens: 1024,
+              },
+            }),
+          });
+
+          // 成功
+          if (geminiRes.ok) {
+            const geminiData = await geminiRes.json();
+            const diagnosis =
+              geminiData?.candidates?.[0]?.content?.parts?.[0]?.text
+              || "診断文の生成に失敗しました。";
+
+            return res.status(200).json({
+              overallScore,
+              physical,
+              emotional,
+              intellectual,
+              diagnosis,
+            });
+          }
+
+          // 429 → リトライ（少し待つ）
+          if (geminiRes.status === 429) {
+            const waitMs = (attempt + 1) * 2000; // 2秒, 4秒
+            console.log(`429 from ${model}, retry ${attempt + 1} after ${waitMs}ms`);
+            await new Promise((r) => setTimeout(r, waitMs));
+            lastError = `429 (${model})`;
+            continue;
+          }
+
+          // その他のエラー → このモデルを諦めて次へ
+          const errBody = await geminiRes.text();
+          console.error(`Gemini ${model} error ${geminiRes.status}:`, errBody);
+          lastError = `${geminiRes.status} (${model})`;
+          break; // 次のモデルへ
+
+        } catch (fetchErr) {
+          console.error(`Fetch error (${model}, attempt ${attempt}):`, fetchErr);
+          lastError = fetchErr.message;
+        }
+      }
     }
 
-    const geminiData = await geminiRes.json();
-    const diagnosis =
-      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text
-      || "診断文の生成に失敗しました。";
-
-    // ---------- レスポンス ----------
-    return res.status(200).json({
-      overallScore,
-      physical,
-      emotional,
-      intellectual,
-      diagnosis,
+    return res.status(502).json({
+      error: `AI APIからのエラー: ${lastError}。数分待ってから再試行してください。`,
     });
   } catch (e) {
     console.error("Error:", e);
