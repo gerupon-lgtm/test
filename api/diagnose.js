@@ -437,12 +437,17 @@ function calcDailyFortune(meishiki, dayPillar) {
   else if (cycle[(iSelf+2)%5] === dayElem) { gogyoEffect = "克出（" + JP[selfElem] + "が" + JP[dayElem] + "を剋す力を使う活動的な日）"; gogyoBonus = 3; }
   else { gogyoEffect = JP[dayElem] + "の気が巡る日"; gogyoBonus = 0; }
 
-  // 通変星の日運スコア
-  const tsuhenScores = { "比肩":60, "劫財":50, "食神":85, "傷官":55, "偏財":75, "正財":80, "偏官":45, "正官":70, "偏印":55, "印綬":75 };
-  const tsuhenScore = tsuhenScores[tsuhen] ?? 60;
+  // 通変星の日運スコア（0-100）
+  const tsuhenScores = { "比肩":55, "劫財":40, "食神":85, "傷官":45, "偏財":70, "正財":80, "偏官":35, "正官":65, "偏印":50, "印綬":75 };
+  const tsuhenScore = tsuhenScores[tsuhen] ?? 50;
 
-  // 総合日運スコア (0-100)
-  const fortuneScore = Math.min(100, Math.max(0, Math.round(energyScore * 0.4 + tsuhenScore * 0.4 + 50 + gogyoBonus)));
+  // 五行相性スコア（0-100）
+  const gogyoScore = Math.max(0, Math.min(100, 50 + gogyoBonus * 5));
+
+  // 総合日運スコア (0-100): 十二運50% + 通変星35% + 五行15%
+  const fortuneScore = Math.min(100, Math.max(0, Math.round(
+    energyScore * 0.50 + tsuhenScore * 0.35 + gogyoScore * 0.15
+  )));
 
   return {
     dayPillarStr: dayPillar.stem + dayPillar.branch,
