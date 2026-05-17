@@ -9,12 +9,22 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POSTのみ対応" });
 
-  const { nameA, birthA, genderA, timeA, nameB, birthB, genderB, timeB, targetDate, mode } = req.body;
+  const { nameA, birthA, genderA, timeA, nameB, birthB, genderB, timeB, targetDate, mode, timezone } = req.body;
   if (!birthA) return res.status(400).json({ error: "一人目の生年月日が不足" });
 
   const isSolo = mode === "solo" || !birthB;
-  const judgeDate = targetDate ? new Date(targetDate + "T00:00:00") : new Date();
-  const judgeDateStr = judgeDate.toISOString().slice(0, 10);
+
+  // ユーザーのタイムゾーンで「今日」を判定
+  const tz = timezone || "Asia/Tokyo";
+  let judgeDateStr;
+  if (targetDate) {
+    judgeDateStr = targetDate; // ユーザー指定日はそのまま使用
+  } else {
+    // Vercelサーバー(UTC)上で動くが、ユーザーのTZでの「今日」を求める
+    const now = new Date();
+    judgeDateStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // YYYY-MM-DD形式
+  }
+  const judgeDate = new Date(judgeDateStr + "T00:00:00");
 
   // ========== 一人目の計算 ==========
   const meishikiA = buildMeishiki(birthA, timeA);
