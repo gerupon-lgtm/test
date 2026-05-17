@@ -54,7 +54,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
-      diagnosis: result.text, targetDate: judgeDateStr,
+      diagnosis: result.text, usedModel: result.model, targetDate: judgeDateStr,
     });
   }
 
@@ -98,7 +98,7 @@ export default async function handler(req, res) {
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
     fortuneA, fortuneB, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
-    diagnosis: result.text, targetDate: judgeDateStr,
+    diagnosis: result.text, usedModel: result.model, targetDate: judgeDateStr,
   });
 }
 
@@ -267,7 +267,7 @@ function formatMeishiki(m, name) {
 
 function buildSoloPrompt(d) {
   const f = d.fortune;
-  return `あなたはバイオリズムと四柱推命に精通した運勢診断の専門家です。
+  return `あなたはバイオリズムと四柱推命に精通した運勢診断の専門家です。以下のデータのみに基づいて診断文を書いてください。データにない情報を捏造しないでください。
 
 ${formatMeishiki(d.meishiki, d.name)}
 性別: ${d.genderA ? (d.genderA==="female"?"女性":"男性") : "未指定"}
@@ -275,32 +275,33 @@ ${formatMeishiki(d.meishiki, d.name)}
 
 【判定日の日運】
 日柱: ${f.dayPillarStr}（${f.dayElement}の日）
-日運の通変星: ${f.tsuhen}（その日に巡る星）
-日運の十二運: ${f.juniun}（その日のエネルギー）
+日運の通変星: ${f.tsuhen}
+日運の十二運: ${f.juniun}
 五行の影響: ${f.gogyoEffect}
 日運スコア: ${f.fortuneScore}点
 
 バイオリズム（0%=最低〜100%=最高）:
 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}% 総合${d.overallScore}点
 
-【出力指示（厳守）】
-プレーンテキスト500〜800字で書く。マークダウン記法（#、**、-、*）は一切禁止。挨拶不要。
+=== 出力ルール（必ず全て守ること） ===
+形式: プレーンテキストのみ。改行で段落を区切る。
+文字数: 500〜800字。
+禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
 
-【構成】
-1. この日の総合コンディション概要（1文）
-2. 日干「${d.meishiki.day.stem}」（${d.meishiki.dayElementJP}）の性格特性（2文）
-3. この日の日運「${f.tsuhen}」と十二運「${f.juniun}」がもたらす具体的な影響（3文。この日ならではの傾向を述べる）
-4. 五行の日運「${f.gogyoEffect}」が今日にどう作用するか（2文）
-5. バイオリズムの状態（身体・感情・知性の好不調）（2文）
-6. 今日のアドバイス（2文）
+=== 構成（この順番で、各項目を自然な文章としてつなげて書く） ===
+[1] 総合コンディションの一言まとめ。（1文）
+[2] 日干「${d.meishiki.day.stem}」（${d.meishiki.dayElementJP}）が持つ本質的な性格と強み。（2文）
+[3] 判定日に巡る通変星「${f.tsuhen}」の意味と、十二運「${f.juniun}」のエネルギーレベルがこの日にどう作用するか。具体的に「何をすると良いか、何に注意すべきか」を含めること。（3文）
+[4] 五行の日運「${f.gogyoEffect}」の影響。命式の五行バランスと照らし合わせて述べること。（2文）
+[5] バイオリズム3値の好不調。特に高い値や低い値があればその影響を具体的に。（2文）
+[6] この日を過ごすための具体的なアドバイス。行動や心がけを1つ以上提案すること。（2文）
 
-日運の解説では「今日は〇〇の日なので…」のように指定日に特有の診断を行うこと。
-親しみやすく前向きなトーンで、あくまで参考情報として伝える。`;
+トーン: 親しみやすく前向き。断定ではなく「〜の傾向があります」「〜かもしれません」のように参考情報として伝える。`;
 }
 
 function buildPairPrompt(d) {
   const fA = d.fortuneA, fB = d.fortuneB;
-  return `あなたはバイオリズムと四柱推命に精通した相性診断の専門家です。
+  return `あなたはバイオリズムと四柱推命に精通した相性診断の専門家です。以下のデータのみに基づいて診断文を書いてください。データにない情報を捏造しないでください。
 
 ${formatMeishiki(d.meishikiA, d.nameA)}
 性別: ${d.genderA ? (d.genderA==="female"?"女性":"男性") : "未指定"}
@@ -317,52 +318,79 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 【${d.nameB}のこの日の日運】
 通変星: ${fB.tsuhen}　十二運: ${fB.juniun}　五行影響: ${fB.gogyoEffect}　日運スコア: ${fB.fortuneScore}点
 
-五行の関係（固定）: ${d.gogyoRel}
-通変星の相性（固定）: ${d.tsuhenCompat.label}（${d.tsuhenCompat.detail}）
-バイオリズム相性: 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}%
+五行の関係（生涯固定）: ${d.gogyoRel}
+通変星の相性（生涯固定）: ${d.tsuhenCompat.label}（${d.tsuhenCompat.detail}）
+バイオリズム相性（判定日）: 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}%
 総合スコア: ${d.overallScore}%
 
-【出力指示（厳守）】
-プレーンテキスト600〜900字で書く。マークダウン記法（#、**、-、*）は一切禁止。挨拶不要。
+=== 出力ルール（必ず全て守ること） ===
+形式: プレーンテキストのみ。改行で段落を区切る。
+文字数: 600〜900字。
+禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
 
-【構成】
-1. この日の二人の相性の全体像（1文）
-2. 二人の根本的な相性: 五行「${d.gogyoRel}」と通変星「${d.tsuhenCompat.label}」の解説（3文）
-3. この日の日運が二人にどう影響するか: ${d.nameA}に「${fA.tsuhen}」「${fA.juniun}」、${d.nameB}に「${fB.tsuhen}」「${fB.juniun}」が巡る意味と、それが二人の関係にどう作用するか（3文。この日ならではの傾向を具体的に述べる）
-4. バイオリズムの波長の合い方（2文）
-5. この日の二人へのアドバイス（2文。日運を踏まえた具体的な行動提案）
+=== 構成（この順番で、各項目を自然な文章としてつなげて書く） ===
+[1] この日の二人の相性を一言でまとめる。（1文）
+[2] 生涯を通じた根本的な相性の解説。五行「${d.gogyoRel}」がどのような関係をもたらすか、通変星「${d.tsuhenCompat.label}」が二人のコミュニケーションにどう影響するか。（3文）
+[3] 判定日の日運が二人にどう作用するか。${d.nameA}には「${fA.tsuhen}」「${fA.juniun}」が巡り、${d.nameB}には「${fB.tsuhen}」「${fB.juniun}」が巡る。この組み合わせがこの日の二人の関係にどんな変化をもたらすか、具体的に述べること。（3文）
+[4] バイオリズムの波長の合い方。身体・感情・知性のうち特に高い相性と低い相性に触れること。（2文）
+[5] この日の二人への具体的なアドバイス。日運の特徴を踏まえた行動提案を1つ以上含めること。（2文）
 
-「固定の相性」と「この日ならではの相性」を明確に区別して述べること。
-親しみやすく前向きなトーンで、あくまで参考情報として伝える。`;
+「生涯固定の相性」と「この日ならではの相性」を明確に区別して述べること。
+トーン: 親しみやすく前向き。断定ではなく「〜の傾向があります」「〜かもしれません」のように参考情報として伝える。`;
 }
 
 // ================================================================
 //  Gemini API
 // ================================================================
 async function callGemini(apiKey, prompt) {
-  const MAX_RETRIES = 2;
+  // Flash優先、429ならFlash-Liteにフォールバック
+  const MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+  ];
+  const MAX_RETRIES = 1; // 各モデルにつき1回リトライ
   let lastError = null;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const r = await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.8, maxOutputTokens: 3072 },
-        }),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        return { text: d?.candidates?.[0]?.content?.parts?.[0]?.text || "診断文の生成に失敗しました。" };
-      }
-      if (r.status === 429) {
-        await new Promise(r => setTimeout(r, (attempt + 1) * 2500));
-        lastError = "429"; continue;
-      }
-      lastError = String(r.status); break;
-    } catch (e) { lastError = e.message; }
+  let usedModel = "";
+
+  for (const model of MODELS) {
+    let got429 = false;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const r = await fetch(url, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 3072 },
+          }),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          usedModel = model;
+          let text = d?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          // マークダウン記号の除去（Flash-Liteが稀に混入させる対策）
+          text = text.replace(/^#{1,4}\s*/gm, "").replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1").replace(/^[-*]\s+/gm, "").trim();
+          return { text: text || "診断文の生成に失敗しました。", model: usedModel };
+        }
+        if (r.status === 429) {
+          got429 = true;
+          if (attempt < MAX_RETRIES) {
+            await new Promise(r => setTimeout(r, 2000));
+            continue;
+          }
+          // リトライ上限 → 次のモデルへ
+          lastError = `429 (${model})`;
+          break;
+        }
+        lastError = `${r.status} (${model})`;
+        break;
+      } catch (e) { lastError = e.message; break; }
+    }
+    if (got429) continue; // 429なら次モデルへ
+    if (usedModel) break; // 成功済みなら終了
+    // 429以外のエラーでも次モデルを試す
   }
+  if (usedModel) return { text: "", model: usedModel }; // ここには来ないはず
   return { error: `AI APIエラー: ${lastError}。数分後に再試行してください。` };
 }
 
