@@ -96,13 +96,32 @@ export default async function handler(req, res) {
   });
   const result = await callGemini(GEMINI_API_KEY, prompt);
   if (result.error) return res.status(502).json({ error: result.error });
-  const diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
+  let diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
+
+  // 2セクションに分割
+  let baseDiagnosis = diagText;
+  let dailyDiagnosis = "";
+  const sepIdx = diagText.indexOf("===SEPARATOR===");
+  if (sepIdx !== -1) {
+    baseDiagnosis = diagText.substring(0, sepIdx).trim();
+    dailyDiagnosis = diagText.substring(sepIdx + "===SEPARATOR===".length).trim();
+  } else {
+    // セパレーターがない場合: 全文の前半を基本、後半を日運として概算分割
+    const mid = Math.floor(diagText.length * 0.5);
+    const splitAt = diagText.indexOf("。", mid);
+    if (splitAt !== -1 && splitAt < diagText.length * 0.8) {
+      baseDiagnosis = diagText.substring(0, splitAt + 1).trim();
+      dailyDiagnosis = diagText.substring(splitAt + 1).trim();
+    }
+  }
 
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
     fortuneA, fortuneB, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
-    diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
+    baseDiagnosis, dailyDiagnosis,
+    diagnosis: baseDiagnosis + "\n\n" + dailyDiagnosis,
+    usedModel: result.model, targetDate: judgeDateStr,
   });
 }
 
@@ -330,18 +349,26 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 
 === 出力ルール（必ず全て守ること） ===
 形式: プレーンテキストのみ。改行で段落を区切る。
-文字数: 600〜900字。
-禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
+禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。
 日付表現: ${d.isToday ? "判定日は本日なので「今日は」「本日は」を使ってよい。" : "判定日は本日ではないため「今日は」「本日は」は使わないこと。代わりに「この日は」「" + d.judgeDateStr + "は」と表現すること。"}
+セクション区切り: 2つのセクションの間に必ず「===SEPARATOR===」という1行を単独で入れること。この区切り行の前後に余計な文字を入れないこと。
 
-=== 構成（この順番で、各項目を自然な文章としてつなげて書く） ===
-[1] この日の二人の相性を一言でまとめる。（1文）
-[2] 生涯を通じた根本的な相性の解説。五行「${d.gogyoRel}」がどのような関係をもたらすか、通変星「${d.tsuhenCompat.label}」が二人のコミュニケーションにどう影響するか。（3文）
-[3] 判定日の日運が二人にどう作用するか。${d.nameA}には「${fA.tsuhen}」「${fA.juniun}」が巡り、${d.nameB}には「${fB.tsuhen}」「${fB.juniun}」が巡る。この組み合わせがこの日の二人の関係にどんな変化をもたらすか、具体的に述べること。（3文）
-[4] バイオリズムの波長の合い方。身体・感情・知性のうち特に高い相性と低い相性に触れること。（2文）
-[5] この日の二人への具体的なアドバイス。日運の特徴を踏まえた行動提案を1つ以上含めること。（2文）
+=== セクション1: 基本相性（300〜500字） ===
+日付に関係なく生涯を通じた二人の根本的な相性を診断する。
+[1] 二人の基本的な相性を一言でまとめる。（1文）
+[2] 五行「${d.gogyoRel}」がもたらす関係性。どのような場面で相性の良さが出るか、注意点は何か。（3文）
+[3] 通変星「${d.tsuhenCompat.label}」（${d.tsuhenCompat.detail}）が二人のコミュニケーションや価値観にどう影響するか。（2文）
+[4] ${d.nameA}の日干「${d.meishikiA.day.stem}」（${d.meishikiA.dayElementJP}）と${d.nameB}の日干「${d.meishikiB.day.stem}」（${d.meishikiB.dayElementJP}）の性格的な組み合わせから見た相性。（2文）
 
-「生涯固定の相性」と「この日ならではの相性」を明確に区別して述べること。
+この後に「===SEPARATOR===」を1行だけ書く。
+
+=== セクション2: 指定日の相性（300〜500字） ===
+判定日${d.judgeDateStr}における二人の相性を診断する。
+[5] ${d.isToday ? "今日" : "この日"}の二人の相性概要。（1文）
+[6] ${d.nameA}に「${fA.tsuhen}」「${fA.juniun}」が巡り、${d.nameB}に「${fB.tsuhen}」「${fB.juniun}」が巡ることで、二人の関係にどんな変化が生まれるか。（3文）
+[7] バイオリズムの波長の合い方。身体・感情・知性で特に目立つ値に触れる。（2文）
+[8] ${d.isToday ? "今日" : "この日"}の二人への具体的なアドバイス。日運を踏まえた行動提案を含める。（2文）
+
 トーン: 親しみやすく前向き。断定ではなく「〜の傾向があります」「〜かもしれません」のように参考情報として伝える。`;
 }
 
