@@ -25,6 +25,8 @@ export default async function handler(req, res) {
     judgeDateStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // YYYY-MM-DD形式
   }
   const judgeDate = new Date(judgeDateStr + "T00:00:00");
+  const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
+  const isToday = judgeDateStr === todayStr;
 
   // ========== 一人目の計算 ==========
   const meishikiA = buildMeishiki(birthA, timeA);
@@ -45,16 +47,17 @@ export default async function handler(req, res) {
 
     const prompt = buildSoloPrompt({
       name: nameA || "あなた", birthA, genderA, timeA, meishiki: meishikiA,
-      fortune: fortuneA, dayPillar,
+      fortune: fortuneA, dayPillar, isToday,
       physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
     });
     const result = await callGemini(GEMINI_API_KEY, prompt);
     if (result.error) return res.status(502).json({ error: result.error });
+    const diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
 
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
-      diagnosis: result.text, usedModel: result.model, targetDate: judgeDateStr,
+      diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
     });
   }
 
@@ -88,17 +91,18 @@ export default async function handler(req, res) {
     nameA: nameA || "Aさん", nameB: nameB || "Bさん",
     birthA, birthB, genderA, genderB, timeA, timeB,
     meishikiA, meishikiB, gogyoRel, tsuhenCompat,
-    fortuneA, fortuneB, dayPillar,
+    fortuneA, fortuneB, dayPillar, isToday,
     physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
   });
   const result = await callGemini(GEMINI_API_KEY, prompt);
   if (result.error) return res.status(502).json({ error: result.error });
+  const diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
 
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
     fortuneA, fortuneB, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
-    diagnosis: result.text, usedModel: result.model, targetDate: judgeDateStr,
+    diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
   });
 }
 
@@ -287,6 +291,7 @@ ${formatMeishiki(d.meishiki, d.name)}
 形式: プレーンテキストのみ。改行で段落を区切る。
 文字数: 500〜800字。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
+日付表現: ${d.isToday ? "判定日は本日なので「今日は」「本日は」を使ってよい。" : "判定日は本日ではないため「今日は」「本日は」は使わないこと。代わりに「この日は」「" + d.judgeDateStr + "は」と表現すること。"}
 
 === 構成（この順番で、各項目を自然な文章としてつなげて書く） ===
 [1] 総合コンディションの一言まとめ。（1文）
@@ -327,6 +332,7 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 形式: プレーンテキストのみ。改行で段落を区切る。
 文字数: 600〜900字。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
+日付表現: ${d.isToday ? "判定日は本日なので「今日は」「本日は」を使ってよい。" : "判定日は本日ではないため「今日は」「本日は」は使わないこと。代わりに「この日は」「" + d.judgeDateStr + "は」と表現すること。"}
 
 === 構成（この順番で、各項目を自然な文章としてつなげて書く） ===
 [1] この日の二人の相性を一言でまとめる。（1文）
@@ -361,7 +367,7 @@ async function callGemini(apiKey, prompt) {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
+            generationConfig: { temperature: 0.7, maxOutputTokens: 3072 },
           }),
         });
         if (r.ok) {
@@ -484,6 +490,19 @@ function calcDailyFortune(meishiki, dayPillar) {
     gogyoEffect,
     fortuneScore,
   };
+}
+
+// ================================================================
+//  日付表現サニタイズ（判定日が今日でない場合に適用）
+// ================================================================
+function sanitizeDateWords(text, dateStr) {
+  return text
+    .replace(/本日は/g, "この日は")
+    .replace(/今日は/g, "この日は")
+    .replace(/本日の/g, "この日の")
+    .replace(/今日の/g, "この日の")
+    .replace(/本日も/g, "この日も")
+    .replace(/今日も/g, "この日も");
 }
 
 // ================================================================
