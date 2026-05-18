@@ -54,10 +54,16 @@ export default async function handler(req, res) {
     if (result.error) return res.status(502).json({ error: result.error });
     const diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
 
+    // 週間・月間データ + バイオリズムグラフ
+    const weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "solo");
+    const monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "solo");
+    const bioGraph = buildBioGraphData(birthA, judgeDateStr, 30);
+
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
+      weeklyData, monthlyData, bioGraph,
     });
   }
 
@@ -115,6 +121,11 @@ export default async function handler(req, res) {
     }
   }
 
+  // 週間・月間データ + バイオリズムグラフ
+  const weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "pair", meishikiB, birthB);
+  const monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "pair", meishikiB, birthB);
+  const bioGraph = buildBioGraphData(birthA, judgeDateStr, 30, birthB);
+
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
@@ -122,6 +133,7 @@ export default async function handler(req, res) {
     baseDiagnosis, dailyDiagnosis,
     diagnosis: baseDiagnosis + "\n\n" + dailyDiagnosis,
     usedModel: result.model, targetDate: judgeDateStr,
+    weeklyData, monthlyData, bioGraph,
   });
 }
 
@@ -290,7 +302,7 @@ function formatMeishiki(m, name) {
 
 function buildSoloPrompt(d) {
   const f = d.fortune;
-  return `あなたはバイオリズムと四柱推命に精通した運勢診断の専門家です。以下のデータのみに基づいて診断文を書いてください。データにない情報を捏造しないでください。
+  return `あなたは占いライターです。以下のデータに基づいて、友達に話すようなわかりやすい言葉で運勢を伝えてください。専門用語（通変星、十二運、五行、相生、相剋など）は使わず、その意味を日常的な表現に置き換えてください。データにない情報は書かないでください。
 
 ${formatMeishiki(d.meishiki, d.name)}
 性別: ${d.genderA ? (d.genderA==="female"?"女性":"男性") : "未指定"}
@@ -308,24 +320,22 @@ ${formatMeishiki(d.meishiki, d.name)}
 
 === 出力ルール（必ず全て守ること） ===
 形式: プレーンテキストのみ。改行で段落を区切る。
-文字数: 500〜800字。
+文字数: 400〜600字。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
 日付表現: ${d.isToday ? "判定日は本日なので「今日は」「本日は」を使ってよい。" : "判定日は本日ではないため「今日は」「本日は」は使わないこと。代わりに「この日は」「" + d.judgeDateStr + "は」と表現すること。"}
+言葉遣い: 専門用語は一切使わない。「通変星に食神が」→「楽しいことに恵まれやすい運気が」、「十二運が帝旺」→「エネルギーがピークに近い状態」のように、意味だけを伝える。
 
-=== 構成（この順番で、各項目を自然な文章としてつなげて書く） ===
-[1] 総合コンディションの一言まとめ。（1文）
-[2] 日干「${d.meishiki.day.stem}」（${d.meishiki.dayElementJP}）が持つ本質的な性格と強み。（2文）
-[3] 判定日に巡る通変星「${f.tsuhen}」の意味と、十二運「${f.juniun}」のエネルギーレベルがこの日にどう作用するか。具体的に「何をすると良いか、何に注意すべきか」を含めること。（3文）
-[4] 五行の日運「${f.gogyoEffect}」の影響。命式の五行バランスと照らし合わせて述べること。（2文）
-[5] バイオリズム3値の好不調。特に高い値や低い値があればその影響を具体的に。（2文）
-[6] この日を過ごすための具体的なアドバイス。行動や心がけを1つ以上提案すること。（2文）
-
-トーン: 親しみやすく前向き。断定ではなく「〜の傾向があります」「〜かもしれません」のように参考情報として伝える。`;
+=== 構成 ===
+[1] この日のコンディションを一言で。（1文）
+[2] 生まれ持った性格の傾向（長所）。（2文）
+[3] この日の運気の流れ。どんなことがうまくいきやすいか、何に気をつけるとよいか。（3文）
+[4] 体力・気分・頭の回転それぞれの調子。（2文）
+[5] この日を楽しく過ごすための具体的なアドバイス。（2文）`;
 }
 
 function buildPairPrompt(d) {
   const fA = d.fortuneA, fB = d.fortuneB;
-  return `あなたはバイオリズムと四柱推命に精通した相性診断の専門家です。以下のデータのみに基づいて診断文を書いてください。データにない情報を捏造しないでください。
+  return `あなたは占いライターです。以下のデータに基づいて、友達に話すようなわかりやすい言葉で相性を伝えてください。専門用語（通変星、十二運、五行、相生、相剋など）は使わず、その意味を日常的な表現に置き換えてください。データにない情報は書かないでください。
 
 ${formatMeishiki(d.meishikiA, d.nameA)}
 性別: ${d.genderA ? (d.genderA==="female"?"女性":"男性") : "未指定"}
@@ -336,40 +346,37 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 判定日: ${d.judgeDateStr}
 判定日の日柱: ${fA.dayPillarStr}（${fA.dayElement}の日）
 
-【${d.nameA}のこの日の日運】
-通変星: ${fA.tsuhen}　十二運: ${fA.juniun}　五行影響: ${fA.gogyoEffect}　日運スコア: ${fA.fortuneScore}点
+【${d.nameA}のこの日の運気】
+通変星: ${fA.tsuhen}　十二運: ${fA.juniun}　五行影響: ${fA.gogyoEffect}　スコア: ${fA.fortuneScore}点
 
-【${d.nameB}のこの日の日運】
-通変星: ${fB.tsuhen}　十二運: ${fB.juniun}　五行影響: ${fB.gogyoEffect}　日運スコア: ${fB.fortuneScore}点
+【${d.nameB}のこの日の運気】
+通変星: ${fB.tsuhen}　十二運: ${fB.juniun}　五行影響: ${fB.gogyoEffect}　スコア: ${fB.fortuneScore}点
 
-五行の関係（生涯固定）: ${d.gogyoRel}
-通変星の相性（生涯固定）: ${d.tsuhenCompat.label}（${d.tsuhenCompat.detail}）
-バイオリズム相性（判定日）: 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}%
+五行の関係: ${d.gogyoRel}
+通変星の相性: ${d.tsuhenCompat.label}（${d.tsuhenCompat.detail}）
+バイオリズム相性: 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}%
 総合スコア: ${d.overallScore}%
 
 === 出力ルール（必ず全て守ること） ===
 形式: プレーンテキストのみ。改行で段落を区切る。
-禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。
-日付表現: ${d.isToday ? "判定日は本日なので「今日は」「本日は」を使ってよい。" : "判定日は本日ではないため「今日は」「本日は」は使わないこと。代わりに「この日は」「" + d.judgeDateStr + "は」と表現すること。"}
-セクション区切り: 2つのセクションの間に必ず「===SEPARATOR===」という1行を単独で入れること。この区切り行の前後に余計な文字を入れないこと。
+禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。前置き禁止。
+日付表現: ${d.isToday ? "「今日」「本日」を使ってよい。" : "「今日」「本日」は使わない。「この日」「" + d.judgeDateStr + "」と書く。"}
+セクション区切り: 2つのセクションの間に「===SEPARATOR===」を1行だけ入れること。
+言葉遣い: 専門用語は一切使わない。意味だけをわかりやすく伝える。
 
-=== セクション1: 基本相性（300〜500字） ===
-日付に関係なく生涯を通じた二人の根本的な相性を診断する。
-[1] 二人の基本的な相性を一言でまとめる。（1文）
-[2] 五行「${d.gogyoRel}」がもたらす関係性。どのような場面で相性の良さが出るか、注意点は何か。（3文）
-[3] 通変星「${d.tsuhenCompat.label}」（${d.tsuhenCompat.detail}）が二人のコミュニケーションや価値観にどう影響するか。（2文）
-[4] ${d.nameA}の日干「${d.meishikiA.day.stem}」（${d.meishikiA.dayElementJP}）と${d.nameB}の日干「${d.meishikiB.day.stem}」（${d.meishikiB.dayElementJP}）の性格的な組み合わせから見た相性。（2文）
+=== セクション1: ふたりの基本相性（250〜400字） ===
+日付に関係なく、ずっと変わらないふたりの相性。
+[1] ふたりの相性を一言で。（1文）
+[2] ふたりの性格がどう噛み合うか。どんな場面で相性の良さが出るか、すれ違いやすいポイントは何か。（3文）
+[3] ふたりのコミュニケーションの特徴。（2文）
 
-この後に「===SEPARATOR===」を1行だけ書く。
+===SEPARATOR===
 
-=== セクション2: 指定日の相性（300〜500字） ===
-判定日${d.judgeDateStr}における二人の相性を診断する。
-[5] ${d.isToday ? "今日" : "この日"}の二人の相性概要。（1文）
-[6] ${d.nameA}に「${fA.tsuhen}」「${fA.juniun}」が巡り、${d.nameB}に「${fB.tsuhen}」「${fB.juniun}」が巡ることで、二人の関係にどんな変化が生まれるか。（3文）
-[7] バイオリズムの波長の合い方。身体・感情・知性で特に目立つ値に触れる。（2文）
-[8] ${d.isToday ? "今日" : "この日"}の二人への具体的なアドバイス。日運を踏まえた行動提案を含める。（2文）
-
-トーン: 親しみやすく前向き。断定ではなく「〜の傾向があります」「〜かもしれません」のように参考情報として伝える。`;
+=== セクション2: ${d.isToday ? "今日" : d.judgeDateStr}の相性（250〜400字） ===
+[4] ${d.isToday ? "今日" : "この日"}のふたりの調子。（1文）
+[5] それぞれの運気がふたりの関係にどう影響するか。（3文）
+[6] 体力・気分・頭の回転の波長の合い方。（2文）
+[7] ${d.isToday ? "今日" : "この日"}のふたりへのアドバイス。（2文）`;
 }
 
 // ================================================================
@@ -530,6 +537,77 @@ function sanitizeDateWords(text, dateStr) {
     .replace(/今日の/g, "この日の")
     .replace(/本日も/g, "この日も")
     .replace(/今日も/g, "この日も");
+}
+
+// ================================================================
+//  週間・月間データ生成
+// ================================================================
+function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, birthB) {
+  const result = [];
+  const baseDate = new Date(baseDateStr + "T00:00:00");
+  for (let i = 0; i < days; i++) {
+    const d = new Date(baseDate);
+    d.setDate(d.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    const dp = calcDayPillar(ds);
+    const fA = calcDailyFortune(meishikiA, dp);
+    const bioA = calcBiorhythm(diffDays(new Date(birthA), d));
+
+    const entry = { date: ds, dayPillar: dp.stem + dp.branch, dayElement: dp.elementJP };
+
+    if (mode === "solo") {
+      const phy = Math.round(((bioA.physical + 1) / 2) * 100);
+      const emo = Math.round(((bioA.emotional + 1) / 2) * 100);
+      const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
+      const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
+      entry.score = Math.min(100, Math.max(0, Math.round(bioBase * 0.6 + fA.fortuneScore * 0.4)));
+      entry.fortune = fA.fortuneScore;
+      entry.tsuhen = fA.tsuhen;
+      entry.juniun = fA.juniun;
+    } else {
+      const bioB = calcBiorhythm(diffDays(new Date(birthB), d));
+      const fB = calcDailyFortune(meishikiB, dp);
+      const phy = Math.round((1 - Math.abs(bioA.physical - bioB.physical) / 2) * 100);
+      const emo = Math.round((1 - Math.abs(bioA.emotional - bioB.emotional) / 2) * 100);
+      const int_ = Math.round((1 - Math.abs(bioA.intellectual - bioB.intellectual) / 2) * 100);
+      const bioScore = Math.round(phy * 0.25 + emo * 0.35 + int_ * 0.25);
+      const avgF = (fA.fortuneScore + fB.fortuneScore) / 2;
+      const fBonus = Math.round((avgF - 50) / 10);
+      entry.score = Math.min(100, Math.max(0, bioScore + fBonus + 15));
+      entry.fortuneA = fA.fortuneScore;
+      entry.fortuneB = fB.fortuneScore;
+    }
+    result.push(entry);
+  }
+  return result;
+}
+
+// ================================================================
+//  バイオリズムグラフデータ（前後15日 = 30日分）
+// ================================================================
+function buildBioGraphData(birthA, baseDateStr, span, birthB) {
+  const baseDate = new Date(baseDateStr + "T00:00:00");
+  const half = Math.floor(span / 2);
+  const result = { labels: [], a: { physical: [], emotional: [], intellectual: [] } };
+  if (birthB) result.b = { physical: [], emotional: [], intellectual: [] };
+
+  for (let i = -half; i <= half; i++) {
+    const d = new Date(baseDate);
+    d.setDate(d.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    result.labels.push(ds);
+    const bioA = calcBiorhythm(diffDays(new Date(birthA), d));
+    result.a.physical.push(Math.round(((bioA.physical + 1) / 2) * 100));
+    result.a.emotional.push(Math.round(((bioA.emotional + 1) / 2) * 100));
+    result.a.intellectual.push(Math.round(((bioA.intellectual + 1) / 2) * 100));
+    if (birthB) {
+      const bioB = calcBiorhythm(diffDays(new Date(birthB), d));
+      result.b.physical.push(Math.round(((bioB.physical + 1) / 2) * 100));
+      result.b.emotional.push(Math.round(((bioB.emotional + 1) / 2) * 100));
+      result.b.intellectual.push(Math.round(((bioB.intellectual + 1) / 2) * 100));
+    }
+  }
+  return result;
 }
 
 // ================================================================
