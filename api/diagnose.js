@@ -361,15 +361,42 @@ async function callGemini(apiKey, prompt) {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.7, maxOutputTokens: 3072 },
+            generationConfig: { temperature: 0.7, maxOutputTokens: 4096 },
           }),
         });
         if (r.ok) {
           const d = await r.json();
-          usedModel = model;
-          let text = d?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          // マークダウン記号の除去（Flash-Liteが稀に混入させる対策）
+          const candidate = d?.candidates?.[0];
+          let text = candidate?.content?.parts?.[0]?.text || "";
+          const finishReason = candidate?.finishReason || "";
+
+          // マークダウン記号の除去
           text = text.replace(/^#{1,4}\s*/gm, "").replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1").replace(/^[-*]\s+/gm, "").trim();
+
+          // MAX_TOKENSで途切れた場合：1回だけリトライ（短縮プロンプトで再試行）
+          if (finishReason === "MAX_TOKENS" && attempt === 0) {
+            console.log(`Text truncated (${model}), retrying with shorter instruction...`);
+            // 文字数指示を短縮してリトライ
+            prompt = prompt
+              .replace(/500〜800字/g, "400〜600字")
+              .replace(/600〜900字/g, "450〜700字");
+            continue;
+          }
+
+          // それでも途切れた場合：文末を自然に補完
+          if (text && !text.match(/[。！？]$/)) {
+            // 最後の句点までを採用
+            const lastPeriod = text.lastIndexOf("。");
+            if (lastPeriod > text.length * 0.6) {
+              // 60%以上書けていれば、最後の句点で切る
+              text = text.substring(0, lastPeriod + 1);
+            } else {
+              // あまりに短い場合はそのまま句点を付加
+              text = text.replace(/[、，,\s]+$/, "") + "。";
+            }
+          }
+
+          usedModel = model;
           return { text: text || "診断文の生成に失敗しました。", model: usedModel };
         }
         if (r.status === 429) {
@@ -378,7 +405,6 @@ async function callGemini(apiKey, prompt) {
             await new Promise(r => setTimeout(r, 2000));
             continue;
           }
-          // リトライ上限 → 次のモデルへ
           lastError = `429 (${model})`;
           break;
         }
