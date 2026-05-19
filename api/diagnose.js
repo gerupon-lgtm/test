@@ -41,20 +41,21 @@ export default async function handler(req, res) {
     const phy = Math.round(((bioA.physical + 1) / 2) * 100);
     const emo = Math.round(((bioA.emotional + 1) / 2) * 100);
     const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
-    // 日運スコアもコンディションに反映（バイオ60% + 日運40%）
     const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
     const overall = Math.min(100, Math.max(0, Math.round(bioBase * 0.6 + fortuneA.fortuneScore * 0.4)));
 
+    // 5運勢スコア
+    const fiveScores = calcFiveFortuneScores(fortuneA, meishikiA, bioA, genderA);
+
     const prompt = buildSoloPrompt({
       name: nameA || "あなた", birthA, genderA, timeA, meishiki: meishikiA,
-      fortune: fortuneA, dayPillar, isToday,
+      fortune: fortuneA, dayPillar, isToday, fiveScores,
       physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
     });
     const result = await callGemini(GEMINI_API_KEY, prompt);
     if (result.error) return res.status(502).json({ error: result.error });
     const diagText = sanitizeDateWords(result.text, judgeDateStr);
 
-    // 週間・月間データ + バイオリズムグラフ（エラーが起きても診断は返す）
     let weeklyData = [], monthlyData = [], bioGraph = null;
     try {
       weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "solo");
@@ -66,6 +67,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
+      fiveScores,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
       weeklyData, monthlyData, bioGraph,
@@ -328,9 +330,12 @@ ${formatMeishiki(d.meishiki, d.name)}
 バイオリズム（0%=最低〜100%=最高）:
 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}% 総合${d.overallScore}点
 
+【各運勢スコア（0〜100）】
+金運${d.fiveScores.money} 恋愛運${d.fiveScores.love} 仕事運${d.fiveScores.work} 健康運${d.fiveScores.health} 対人運${d.fiveScores.social}
+
 === 出力ルール（必ず全て守ること） ===
 形式: プレーンテキストのみ。改行で段落を区切る。
-文字数: 400〜600字。
+文字数: 500〜700字。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
 日付表現: 「今日は」「本日は」は使わないこと。「この日は」と表現すること。
 言葉遣い: 専門用語は一切使わない。「通変星に食神が」→「楽しいことに恵まれやすい運気が」、「十二運が帝旺」→「エネルギーがピークに近い状態」のように、意味だけを伝える。
@@ -338,9 +343,10 @@ ${formatMeishiki(d.meishiki, d.name)}
 === 構成 ===
 [1] この日のコンディションを一言で。（1文）
 [2] 生まれ持った性格の傾向（長所）。（2文）
-[3] この日の運気の流れ。どんなことがうまくいきやすいか、何に気をつけるとよいか。（3文）
-[4] 体力・気分・頭の回転それぞれの調子。（2文）
-[5] この日を楽しく過ごすための具体的なアドバイス。（2文）`;
+[3] この日の運気の流れ。どんなことがうまくいきやすいか、何に気をつけるとよいか。（2文）
+[4] 金運・恋愛運・仕事運・健康運・対人運のうち特に好調なものと注意が必要なものに触れる。スコアが70以上なら好調、40以下なら注意。全部を羅列せず、目立つ2〜3項目だけ。（2文）
+[5] 体力・気分・頭の回転それぞれの調子。（2文）
+[6] この日を楽しく過ごすための具体的なアドバイス。（2文）`;
 }
 
 function buildPairPrompt(d) {
@@ -534,6 +540,59 @@ function calcDailyFortune(meishiki, dayPillar) {
     gogyoEffect,
     fortuneScore,
   };
+}
+
+// ================================================================
+//  5運勢スコア計算（金運・恋愛運・仕事運・健康運・対人運）
+// ================================================================
+function calcFiveFortuneScores(fortune, meishiki, biorhythm, gender) {
+  const t = fortune.tsuhen;
+  const e = fortune.energyScore;
+  const bio = biorhythm; // { physical, emotional, intellectual } (-1〜1のsin値)
+
+  // バイオリズムを0-100にスケーリング
+  const bioPhy = Math.round(((bio.physical + 1) / 2) * 100);
+  const bioEmo = Math.round(((bio.emotional + 1) / 2) * 100);
+  const bioInt = Math.round(((bio.intellectual + 1) / 2) * 100);
+
+  // 通変星→各運勢への影響マップ（-15〜+20の補正値）
+  const TSUHEN_MAP = {
+    //            金運  恋愛  仕事  健康  対人
+    "比肩":   [  -5,   -5,    5,    5,   -5 ],
+    "劫財":   [ -10,    0,    0,   -5,  -10 ],
+    "食神":   [  10,   15,    5,   10,   15 ],
+    "傷官":   [   5,    5,   -5,   -5,   -5 ],
+    "偏財":   [  20,   10,   10,    0,   10 ],
+    "正財":   [  15,   15,   15,    5,    5 ],
+    "偏官":   [  -5,   -5,   10,  -10,   -5 ],
+    "正官":   [   5,   10,   20,    0,   10 ],
+    "偏印":   [   0,   -5,    5,   -5,    0 ],
+    "印綬":   [   5,    5,   15,    5,   10 ],
+  };
+
+  const tm = TSUHEN_MAP[t] || [0, 0, 0, 0, 0];
+
+  // 性別による恋愛運の追加補正
+  let loveBonusGender = 0;
+  if (gender === "male" && (t === "正財" || t === "偏財")) loveBonusGender = 5;
+  if (gender === "female" && (t === "正官" || t === "偏官")) loveBonusGender = 5;
+
+  // 五行バランスの偏り補正（金の数→金運、水の数→対人運に微補正）
+  const gc = meishiki.gogyoCount;
+  const metalBonus = Math.min(gc.metal * 3, 9);
+  const waterBonus = Math.min(gc.water * 2, 6);
+
+  // 各運勢スコア = 基礎（十二運×0.3 + バイオリズム×0.3）+ 通変星補正 + 固有補正
+  const base = (n) => Math.round(e * 0.3 + n * 0.3 + 20);
+  const clamp = (v) => Math.min(100, Math.max(5, v));
+
+  const money    = clamp(base(bioInt) + tm[0] + metalBonus);
+  const love     = clamp(base(bioEmo) + tm[1] + loveBonusGender);
+  const work     = clamp(base(bioInt) + tm[2]);
+  const health   = clamp(base(bioPhy) + tm[3]);
+  const social   = clamp(base(bioEmo) + tm[4] + waterBonus);
+
+  return { money, love, work, health, social };
 }
 
 // ================================================================
