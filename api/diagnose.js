@@ -54,10 +54,15 @@ export default async function handler(req, res) {
     if (result.error) return res.status(502).json({ error: result.error });
     const diagText = sanitizeDateWords(result.text, judgeDateStr);
 
-    // 週間・月間データ + バイオリズムグラフ
-    const weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "solo");
-    const monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "solo");
-    const bioGraph = buildBioGraphData(birthA, judgeDateStr, 30);
+    // 週間・月間データ + バイオリズムグラフ（エラーが起きても診断は返す）
+    let weeklyData = [], monthlyData = [], bioGraph = null;
+    try {
+      weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "solo");
+      monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "solo");
+      bioGraph = buildBioGraphData(birthA, judgeDateStr, 30);
+    } catch (e) {
+      console.error("Range data error:", e);
+    }
 
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
@@ -121,10 +126,15 @@ export default async function handler(req, res) {
     }
   }
 
-  // 週間・月間データ + バイオリズムグラフ
-  const weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "pair", meishikiB, birthB);
-  const monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "pair", meishikiB, birthB);
-  const bioGraph = buildBioGraphData(birthA, judgeDateStr, 30, birthB);
+  // 週間・月間データ + バイオリズムグラフ（エラーが起きても診断は返す）
+  let weeklyData = [], monthlyData = [], bioGraph = null;
+  try {
+    weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "pair", meishikiB, birthB);
+    monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "pair", meishikiB, birthB);
+    bioGraph = buildBioGraphData(birthA, judgeDateStr, 30, birthB);
+  } catch (e) {
+    console.error("Range data error:", e);
+  }
 
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
