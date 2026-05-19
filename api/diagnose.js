@@ -52,7 +52,7 @@ export default async function handler(req, res) {
     });
     const result = await callGemini(GEMINI_API_KEY, prompt);
     if (result.error) return res.status(502).json({ error: result.error });
-    const diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
+    const diagText = sanitizeDateWords(result.text, judgeDateStr);
 
     // 週間・月間データ + バイオリズムグラフ
     const weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "solo");
@@ -102,7 +102,7 @@ export default async function handler(req, res) {
   });
   const result = await callGemini(GEMINI_API_KEY, prompt);
   if (result.error) return res.status(502).json({ error: result.error });
-  let diagText = isToday ? result.text : sanitizeDateWords(result.text, judgeDateStr);
+  let diagText = sanitizeDateWords(result.text, judgeDateStr);
 
   // 2セクションに分割
   let baseDiagnosis = diagText;
@@ -302,7 +302,7 @@ function formatMeishiki(m, name) {
 
 function buildSoloPrompt(d) {
   const f = d.fortune;
-  return `あなたは占いライターです。以下のデータに基づいて、友達に話すようなわかりやすい言葉で運勢を伝えてください。専門用語（通変星、十二運、五行、相生、相剋など）は使わず、その意味を日常的な表現に置き換えてください。データにない情報は書かないでください。
+  return `あなたは四柱推命とバイオリズムに精通した占いライターです。以下のデータに基づいて、わかりやすい言葉で運勢を伝えてください。専門用語（通変星、十二運、五行、相生、相剋など）は使わず、その意味を日常的な表現に置き換えてください。データにない情報は書かないでください。
 
 ${formatMeishiki(d.meishiki, d.name)}
 性別: ${d.genderA ? (d.genderA==="female"?"女性":"男性") : "未指定"}
@@ -322,7 +322,7 @@ ${formatMeishiki(d.meishiki, d.name)}
 形式: プレーンテキストのみ。改行で段落を区切る。
 文字数: 400〜600字。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
-日付表現: ${d.isToday ? "判定日は本日なので「今日は」「本日は」を使ってよい。" : "判定日は本日ではないため「今日は」「本日は」は使わないこと。代わりに「この日は」「" + d.judgeDateStr + "は」と表現すること。"}
+日付表現: 「今日は」「本日は」は使わないこと。「この日は」と表現すること。
 言葉遣い: 専門用語は一切使わない。「通変星に食神が」→「楽しいことに恵まれやすい運気が」、「十二運が帝旺」→「エネルギーがピークに近い状態」のように、意味だけを伝える。
 
 === 構成 ===
@@ -335,7 +335,7 @@ ${formatMeishiki(d.meishiki, d.name)}
 
 function buildPairPrompt(d) {
   const fA = d.fortuneA, fB = d.fortuneB;
-  return `あなたは占いライターです。以下のデータに基づいて、友達に話すようなわかりやすい言葉で相性を伝えてください。専門用語（通変星、十二運、五行、相生、相剋など）は使わず、その意味を日常的な表現に置き換えてください。データにない情報は書かないでください。
+  return `あなたは四柱推命とバイオリズムに精通した占いライターです。以下のデータに基づいて、わかりやすい言葉で運勢を伝えてください。専門用語（通変星、十二運、五行、相生、相剋など）は使わず、その意味を日常的な表現に置き換えてください。データにない情報は書かないでください。
 
 ${formatMeishiki(d.meishikiA, d.nameA)}
 性別: ${d.genderA ? (d.genderA==="female"?"女性":"男性") : "未指定"}
@@ -360,9 +360,9 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 === 出力ルール（必ず全て守ること） ===
 形式: プレーンテキストのみ。改行で段落を区切る。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。前置き禁止。
-日付表現: ${d.isToday ? "「今日」「本日」を使ってよい。" : "「今日」「本日」は使わない。「この日」「" + d.judgeDateStr + "」と書く。"}
+日付表現: 「今日」「本日」は使わない。「この日」と表現すること。
 セクション区切り: 2つのセクションの間に「===SEPARATOR===」を1行だけ入れること。
-言葉遣い: 専門用語は一切使わない。意味だけをわかりやすく伝える。
+言葉遣い: 専門用語は一切使わない。「通変星に食神が」→「楽しいことに恵まれやすい運気が」、「十二運が帝旺」→「エネルギーがピークに近い状態」のように、意味だけを伝える。
 
 === セクション1: ふたりの基本相性（250〜400字） ===
 日付に関係なく、ずっと変わらないふたりの相性。
@@ -372,11 +372,11 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 
 ===SEPARATOR===
 
-=== セクション2: ${d.isToday ? "今日" : d.judgeDateStr}の相性（250〜400字） ===
-[4] ${d.isToday ? "今日" : "この日"}のふたりの調子。（1文）
+=== セクション2: この日の相性（250〜400字） ===
+[4] この日のふたりの調子。（1文）
 [5] それぞれの運気がふたりの関係にどう影響するか。（3文）
 [6] 体力・気分・頭の回転の波長の合い方。（2文）
-[7] ${d.isToday ? "今日" : "この日"}のふたりへのアドバイス。（2文）`;
+[7] この日のふたりへのアドバイス。（2文）`;
 }
 
 // ================================================================
