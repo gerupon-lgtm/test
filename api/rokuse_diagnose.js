@@ -528,40 +528,74 @@ function sanitizeDateWords(text, dateStr) {
 async function callGemini(apiKey, prompt) {
   const MODELS = [
     "gemini-2.5-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
+    "gemini-2.5-flash-lite",
   ];
+  const MAX_RETRIES = 1;
+  let lastError = null;
+  let usedModel = "";
+
   for (const model of MODELS) {
-    try {
-      const r = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
+    let got429 = false;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+        const r = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.85, maxOutputTokens: 900 },
+            generationConfig: { temperature: 0.7, maxOutputTokens: 3072 },
           }),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          const candidate = d?.candidates?.[0];
+          let text = candidate?.content?.parts?.[0]?.text || "";
+          const finishReason = candidate?.finishReason || "";
+
+          // マークダウン記号の除去
+          text = text.replace(/^#{1,4}\s*/gm, "").replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1").replace(/^[-*]\s+/gm, "").trim();
+
+          // MAX_TOKENSで途切れた場合：1回だけリトライ
+          if (finishReason === "MAX_TOKENS" && attempt === 0) {
+            prompt = prompt
+              .replace(/400〜500字/g, "300〜400字")
+              .replace(/300字程度/g, "250字程度")
+              .replace(/600文字程度/g, "450文字程度");
+            continue;
+          }
+
+          // それでも途切れた場合：最後の句点で自然に補完
+          if (text && !text.match(/[。！？]$/)) {
+            const lastPeriod = text.lastIndexOf("。");
+            if (lastPeriod > text.length * 0.6) {
+              text = text.substring(0, lastPeriod + 1);
+            } else {
+              text = text.replace(/[、，,\s]+$/, "") + "。";
+            }
+          }
+
+          usedModel = model;
+          return { text: text || "診断文の生成に失敗しました。", model: usedModel };
         }
-      );
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        if (r.status === 429 || r.status === 503) continue;
-        return { error: `Gemini ${model} error: ${err?.error?.message || r.status}` };
-      }
-      const data = await r.json();
-      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) continue;
-      // 廃止モデルは200でエラーメッセージを返す場合があるためチェック
-      const errMsg = data?.error?.message;
-      if (errMsg) continue;
-      return { text, model };
-    } catch (e) {
-      if (MODELS.indexOf(model) < MODELS.length - 1) continue;
-      return { error: e.message };
+        if (r.status === 429) {
+          got429 = true;
+          if (attempt < MAX_RETRIES) {
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            continue;
+          }
+          lastError = `429 (${model})`;
+          break;
+        }
+        lastError = `${r.status} (${model})`;
+        break;
+      } catch (e) { lastError = e.message; break; }
     }
+    if (got429) continue;
+    if (usedModel) break;
   }
-  return { error: "全Geminiモデルへの接続に失敗しました" };
+  if (usedModel) return { text: "", model: usedModel };
+  return { error: `AI APIエラー: ${lastError}。数分後に再試行してください。` };
 }
 
 // ================================================================
@@ -569,47 +603,40 @@ async function callGemini(apiKey, prompt) {
 // ================================================================
 
 function buildSoloPrompt({ name, birthA, genderA, rokuse, nenun, tsukinun, hiun, fiveScores, physical, emotional, intellectual, overallScore, judgeDateStr, isToday }) {
-  const dateLabel = isToday ? "今日" : `${judgeDateStr}`;
+  const dateLabel = isToday ? "今日" : judgeDateStr;
   const gLabel = genderA === "male" ? "男性" : genderA === "female" ? "女性" : "";
-  const daiW = nenun.isDaiKasai ? "【重要】今年は大殺界です。" : "";
-  const hiDaiW = hiun.isDaiKasai ? "【この日は大殺界日運】" : "";
+  const daiW = nenun.isDaiKasai ? "今年は大殺界（エネルギーが低下しやすい年）です。" : "";
+  const hiDaiW = hiun.isDaiKasai ? "この日は大殺界の日運です。" : "";
 
-  return `あなたは六星占術の熟練した占い師です。以下の情報をもとに、${name}さんへの${dateLabel}の運勢診断を行ってください。
+  return `あなたは六星占術とバイオリズムに精通した占いライターです。以下のデータに基づいて、わかりやすい言葉で運勢を伝えてください。データにない情報は書かないでください。
 
-【基本情報】
-名前: ${name}（${gLabel}）
-生年月日: ${birthA}
-六星: ${rokuse.fullName}（${rokuse.symbol}）
+【${name}さんの情報】
+六星: ${rokuse.fullName}（${rokuse.symbol}） 性別: ${gLabel}
 特性: ${rokuse.desc}
+今年（${nenun.year}年）の運気サイクル: ${nenun.cycle}（${nenun.desc}）${daiW ? " ※" + daiW : ""}
+今月の運気サイクル: ${tsukinun.cycle}（${tsukinun.desc}）
+判定日の日運サイクル: ${hiun.cycle}（${hiun.desc}）${hiDaiW ? " ※" + hiDaiW : ""}
 
-【年運 ${nenun.year}年】
-サイクル: ${nenun.cycle} — ${nenun.desc}
-${daiW}
+バイオリズム（0%=最低〜100%=最高）:
+身体${physical}% 感情${emotional}% 知性${intellectual}% 総合${overallScore}点
 
-【月運 ${tsukinun.month}月】
-サイクル: ${tsukinun.cycle} — ${tsukinun.desc}
+各運勢スコア（0〜100）:
+金運${fiveScores.money} 恋愛運${fiveScores.love} 仕事運${fiveScores.work} 健康運${fiveScores.health} 対人運${fiveScores.social}
 
-【${dateLabel}の日運】
-サイクル: ${hiun.cycle} — ${hiun.desc}
-${hiDaiW}
+=== 出力ルール（必ず全て守ること） ===
+形式: プレーンテキストのみ。改行で段落を区切る。
+文字数: 400〜500字。必ず400字以上書くこと。
+禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
+日付表現: 「今日は」「本日は」は使わないこと。「この日は」と表現すること。
+言葉遣い: 専門用語は一切使わない。サイクル名（花・実・大殺界など）はそのまま使ってよいが、必ず意味を添えること。
 
-【バイオリズム（0〜100点）】
-身体: ${physical} / 感情: ${emotional} / 知性: ${intellectual}
-
-【5運勢スコア】
-金運:${fiveScores.money} 恋愛運:${fiveScores.love} 仕事運:${fiveScores.work} 健康運:${fiveScores.health} 対人運:${fiveScores.social}
-
-【総合スコア】${overallScore}点
-
----
-上記をもとに、${name}さんへの${dateLabel}の運勢診断を400〜500文字で書いてください。
-
-・六星（${rokuse.name}）の特性と今年のサイクル（${nenun.cycle}）を絡めて語ってください
-・大殺界の場合は丁寧にアドバイスを（怖がらせすぎず建設的に）
-・今日の日運（${hiun.cycle}）の具体的なアドバイスを含めてください
-・5運勢の中で特に高いものと低いものに触れてください
-・親しみやすく温かみのある口調で、専門用語には説明を添えてください
-・「${dateLabel}は」から始めないでください`;
+=== 構成 ===
+[1] この日のコンディションを一言で。（1文）
+[2] ${rokuse.name}の特性と今年のサイクル（${nenun.cycle}）の組み合わせから見える傾向。大殺界なら怖がらせすぎず建設的なアドバイスを。（2文）
+[3] この日の日運（${hiun.cycle}）の流れ。何がうまくいきやすく、何に気をつけるとよいか。（2文）
+[4] 各運勢スコアのうち特に高いもの（70以上）と注意が必要なもの（40以下）に触れる。全部羅列せず目立つ2〜3項目だけ。（2文）
+[5] 体力・気分・頭の回転それぞれの調子。（2文）
+[6] この日を楽しく過ごすための具体的なアドバイス。（2文）`;
 }
 
 // ================================================================
@@ -618,40 +645,42 @@ ${hiDaiW}
 
 function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB, compat, daiCompat, physical, emotional, intellectual, overallScore, judgeDateStr, isToday }) {
   const dateLabel = isToday ? "今日" : judgeDateStr;
-  const daiA = nenunA.isDaiKasai ? "（大殺界）" : "";
-  const daiB = nenunB.isDaiKasai ? "（大殺界）" : "";
+  const daiA = nenunA.isDaiKasai ? "（大殺界の年）" : "";
+  const daiB = nenunB.isDaiKasai ? "（大殺界の年）" : "";
 
-  return `あなたは六星占術の熟練した占い師です。以下の情報をもとに、${nameA}さんと${nameB}さんの相性診断を行ってください。
+  return `あなたは六星占術とバイオリズムに精通した占いライターです。以下のデータに基づいて、わかりやすい言葉で相性を伝えてください。データにない情報は書かないでください。
 
 【${nameA}さん】
-六星: ${rokuseA.fullName}（${rokuseA.symbol}）特性: ${rokuseA.desc}
-今年（${nenunA.year}年）のサイクル: ${nenunA.cycle}${daiA} / 今月のサイクル: ${tsukinA.cycle}
-${dateLabel}の日運: ${hiUnA.cycle}
+六星: ${rokuseA.fullName}（${rokuseA.symbol}） 特性: ${rokuseA.desc}
+今年（${nenunA.year}年）のサイクル: ${nenunA.cycle}${daiA} / 今月: ${tsukinA.cycle}
+判定日の日運: ${hiUnA.cycle}
 
 【${nameB}さん】
-六星: ${rokuseB.fullName}（${rokuseB.symbol}）特性: ${rokuseB.desc}
-今年（${nenunB.year}年）のサイクル: ${nenunB.cycle}${daiB} / 今月のサイクル: ${tsukinB.cycle}
-${dateLabel}の日運: ${hiUnB.cycle}
+六星: ${rokuseB.fullName}（${rokuseB.symbol}） 特性: ${rokuseB.desc}
+今年（${nenunB.year}年）のサイクル: ${nenunB.cycle}${daiB} / 今月: ${tsukinB.cycle}
+判定日の日運: ${hiUnB.cycle}
 
-【六星相性】${compat.label}（スコア${compat.score}）
-【大殺界相性補正】スコア${daiCompat}
-【バイオリズム相性（0〜100）】身体:${physical} 感情:${emotional} 知性:${intellectual}
-【総合相性スコア】${overallScore}点
+六星の相性: ${compat.label}（スコア${compat.score}）
+バイオリズム相性: 身体${physical}% 感情${emotional}% 知性${intellectual}%
+総合相性スコア: ${overallScore}%
 
----
-以下の2部構成でお願いします（合計600文字程度）：
+=== 出力ルール（必ず全て守ること） ===
+形式: プレーンテキストのみ。改行で段落を区切る。
+禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。前置き禁止。
+日付表現: 「今日」「本日」は使わない。「この日」と表現すること。
+セクション区切り: 2つのセクションの間に「===SEPARATOR===」を1行だけ入れること。それ以外の場所には入れないこと。
+言葉遣い: 専門用語は使わない。サイクル名はそのまま使ってよいが必ず意味を添えること。
 
-【基本相性パート（300字程度）】
-・二人の六星の組み合わせ（${compat.label}）の特徴と深い縁
-・それぞれの特性が補い合う点、気をつけるべき点
-・長期的な関係性へのアドバイス
+=== セクション1: ふたりの基本相性（250〜350字） ===
+[1] ふたりの相性を一言で。（1文）
+[2] ${rokuseA.name}と${rokuseB.name}の組み合わせ（${compat.label}）がどう噛み合うか。どんな場面で相性の良さが出るか、すれ違いやすいポイントは何か。（3文）
+[3] ふたりへの長期的なアドバイス。（1文）
 
 ===SEPARATOR===
 
-【${dateLabel}の二人の運気パート（300字程度）】
-・今日の日運（${nameA}:${hiUnA.cycle}, ${nameB}:${hiUnB.cycle}）の重ね合わせ
-・どちらかが大殺界なら配慮ある助言を
-・二人で過ごすとよいこと、避けた方がよいこと
-
-親しみやすく温かい口調でお願いします。`;
+=== セクション2: この日のふたりの運気（250〜350字） ===
+[4] この日のふたりの調子を一言で。（1文）
+[5] それぞれの日運（${nameA}:${hiUnA.cycle}、${nameB}:${hiUnB.cycle}）がふたりの関係にどう影響するか。どちらかが大殺界なら配慮ある助言を。（3文）
+[6] 体力・気分・頭の回転の波長の合い方。（1文）
+[7] この日のふたりへの具体的なアドバイス。（1文）`;
 }
