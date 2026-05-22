@@ -527,7 +527,7 @@ function sanitizeDateWords(text, dateStr) {
 
 async function callGemini(apiKey, prompt) {
   const MODELS = [
-    "gemini-2.0-flash",
+    "gemini-2.5-flash-preview-05-20",
     "gemini-2.0-flash-lite",
     "gemini-1.5-flash",
   ];
@@ -552,6 +552,9 @@ async function callGemini(apiKey, prompt) {
       const data = await r.json();
       const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text) continue;
+      // 廃止モデルは200でエラーメッセージを返す場合があるためチェック
+      const errMsg = data?.error?.message;
+      if (errMsg) continue;
       return { text, model };
     } catch (e) {
       if (MODELS.indexOf(model) < MODELS.length - 1) continue;
