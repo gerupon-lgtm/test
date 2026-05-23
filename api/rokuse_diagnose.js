@@ -705,7 +705,7 @@ async function callGemini(apiKey, prompt) {
 //  Geminiプロンプト（ソロ）
 // ================================================================
 
-function buildSoloPrompt({ name, birthA, genderA, rokuse, nenun, tsukinun, hiun, fiveScores, physical, emotional, intellectual, overallScore, judgeDateStr, isToday }) {
+function buildSoloPrompt({ name, birthA, genderA, rokuse, nenun, tsukinun, hiun, fiveScores, physical, emotional, intellectual, rokuseScore, bioScore, judgeDateStr, isToday }) {
   const dateLabel = isToday ? "今日" : judgeDateStr;
   const gLabel = genderA === "male" ? "男性" : genderA === "female" ? "女性" : "";
   const daiW = nenun.isDaiKasai ? "今年は大殺界（エネルギーが低下しやすい年）です。" : "";
@@ -747,7 +747,7 @@ function buildSoloPrompt({ name, birthA, genderA, rokuse, nenun, tsukinun, hiun,
 //  Geminiプロンプト（ペア）
 // ================================================================
 
-function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB, compat, daiCompat, physical, emotional, intellectual, overallScore, judgeDateStr, isToday }) {
+function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB, compat, daiCompat, physical, emotional, intellectual, rokuseScore, bioScore, judgeDateStr, isToday }) {
   const dateLabel = isToday ? "今日" : judgeDateStr;
   const daiA = nenunA.isDaiKasai ? "（大殺界の年）" : "";
   const daiB = nenunB.isDaiKasai ? "（大殺界の年）" : "";
