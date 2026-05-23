@@ -43,9 +43,9 @@ export default async function handler(req, res) {
   const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
   const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
 
-  // 総合スコア: バイオ50% + 日運50%
+  // 総合スコア: バイオ35% + 年運15% + 月運15% + 日運35%
   const overallA = Math.min(100, Math.max(0,
-    Math.round(bioBase * 0.5 + hiUnA.score * 0.5)
+    Math.round(bioBase * 0.35 + nenunA.score * 0.15 + tsukinA.score * 0.15 + hiUnA.score * 0.35)
   ));
 
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -91,8 +91,13 @@ export default async function handler(req, res) {
   const compat    = calcRokuseCompat(rokuseA, rokuseB);
   const daiCompat = calcDaiKasaiCompat(nenunA, nenunB);
 
+  // 年運・日運の平均スコアによる相性補正
+  const nenunAvg = Math.round((nenunA.score + nenunB.score) / 2);
+  const hiUnAvg  = Math.round((hiUnA.score  + hiUnB.score)  / 2);
+
+  // 総合相性: バイオ30% + 六星相性30% + 年運平均20% + 日運平均20%
   const overallPair = Math.min(100, Math.max(0,
-    Math.round(bioCompat * 0.4 + compat.score * 0.4 + daiCompat * 0.2)
+    Math.round(bioCompat * 0.30 + compat.score * 0.30 + nenunAvg * 0.20 + hiUnAvg * 0.20)
   ));
 
   const phyP  = Math.round((1 - Math.abs(bioA.physical  - bioB.physical)  / 2) * 100);
@@ -738,17 +743,19 @@ function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokus
 日付表現: 「今日」「本日」は使わない。「この日」と表現すること。
 セクション区切り: 2つのセクションの間に「===SEPARATOR===」を1行だけ入れること。それ以外の場所には入れないこと。
 言葉遣い: 専門用語は使わない。サイクル名はそのまま使ってよいが必ず意味を添えること。
+合計文字数: セクション1・2合わせて700〜800字。必ず700字以上書くこと。
 
-=== セクション1: ふたりの基本相性（250〜350字） ===
+=== セクション1: ふたりの基本相性（300〜350字） ===
 [1] ふたりの相性を一言で。（1文）
 [2] ${rokuseA.name}と${rokuseB.name}の組み合わせ（${compat.label}）がどう噛み合うか。どんな場面で相性の良さが出るか、すれ違いやすいポイントは何か。（3文）
 [3] ふたりへの長期的なアドバイス。（1文）
 
 ===SEPARATOR===
 
-=== セクション2: この日のふたりの運気（250〜350字） ===
-[4] この日のふたりの調子を一言で。（1文）
-[5] それぞれの日運（${nameA}:${hiUnA.cycle}、${nameB}:${hiUnB.cycle}）がふたりの関係にどう影響するか。どちらかが大殺界なら配慮ある助言を。（3文）
-[6] 体力・気分・頭の回転の波長の合い方。（1文）
-[7] この日のふたりへの具体的なアドバイス。（1文）`;
+=== セクション2: この日のふたりの運気（350〜450字） ===
+[4] この日のふたりの総合的な調子を一言で。（1文）
+[5] ${nameA}さんの今年の流れ（${nenunA.cycle}）とこの日の日運（${hiUnA.cycle}）が、ふたりの関係にどんな影響をもたらすか。（2文）
+[6] ${nameB}さんの今年の流れ（${nenunB.cycle}）とこの日の日運（${hiUnB.cycle}）について同様に。大殺界があれば相手への配慮ある助言を含める。（2文）
+[7] バイオリズムの身体${physical}%・感情${emotional}%・知性${intellectual}%から見た、この日のふたりの波長の合い方。（2文）
+[8] この日のふたりにおすすめの過ごし方や、避けた方がよいことの具体的なアドバイス。（2文）`;
 }
