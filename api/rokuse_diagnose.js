@@ -116,18 +116,44 @@ export default async function handler(req, res) {
   if (result.error) return res.status(502).json({ error: result.error });
   let diagText = sanitizeDateWords(result.text, judgeDateStr);
 
-  let baseDiagnosis = diagText, dailyDiagnosis = "";
-  const sepIdx = diagText.indexOf("===SEPARATOR===");
+  let baseDiagnosis = "", dailyDiagnosis = "";
+
+  // SEPARATORの表記ゆれにも対応（全角スペース・改行混入・短縮形）
+  const SEP_PATTERNS = [
+    "===SEPARATOR===",
+    "=== SEPARATOR ===",
+    "===separator===",
+    "＝＝＝SEPARATOR＝＝＝",
+  ];
+  let sepIdx = -1, sepLen = 15;
+  for (const pat of SEP_PATTERNS) {
+    const idx = diagText.indexOf(pat);
+    if (idx !== -1) { sepIdx = idx; sepLen = pat.length; break; }
+  }
+
   if (sepIdx !== -1) {
     baseDiagnosis  = diagText.substring(0, sepIdx).trim();
-    dailyDiagnosis = diagText.substring(sepIdx + 15).trim();
+    dailyDiagnosis = diagText.substring(sepIdx + sepLen).trim();
+    // セクション見出し行（=== セクション2: ... ===）が残っている場合は除去
+    dailyDiagnosis = dailyDiagnosis.replace(/^={2,}[^\n]*={2,}\n?/, "").trim();
   } else {
+    // SEPARATORがない場合: 文字数で均等分割（前半=基本相性、後半=日運）
     const mid = Math.floor(diagText.length * 0.5);
     const sp  = diagText.indexOf("。", mid);
-    if (sp !== -1 && sp < diagText.length * 0.8) {
+    if (sp !== -1 && sp < diagText.length * 0.85) {
       baseDiagnosis  = diagText.substring(0, sp + 1).trim();
       dailyDiagnosis = diagText.substring(sp + 1).trim();
+    } else {
+      // どうしても分割できない場合は全文を基本相性に
+      baseDiagnosis  = diagText;
+      dailyDiagnosis = "";
     }
+  }
+
+  // どちらかが極端に短い（50字未満）場合は全文を基本相性として扱う
+  if (dailyDiagnosis.length < 50) {
+    baseDiagnosis  = diagText;
+    dailyDiagnosis = "";
   }
 
   let weeklyData = [], monthlyData = [], bioGraph = null;
@@ -741,9 +767,9 @@ function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokus
 形式: プレーンテキストのみ。改行で段落を区切る。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。前置き禁止。
 日付表現: 「今日」「本日」は使わない。「この日」と表現すること。
-セクション区切り: 2つのセクションの間に「===SEPARATOR===」を1行だけ入れること。それ以外の場所には入れないこと。
+セクション区切り: セクション1の末尾とセクション2の先頭の間に「===SEPARATOR===」を1行だけ入れること。他の場所には絶対に入れないこと。「===SEPARATOR===」の前後に見出し行は書かないこと。
 言葉遣い: 専門用語は使わない。サイクル名はそのまま使ってよいが必ず意味を添えること。
-合計文字数: セクション1・2合わせて700〜800字。必ず700字以上書くこと。
+合計文字数: セクション1・2合わせて700〜800字。必ず700字以上書くこと。各セクション最低300字。
 
 === セクション1: ふたりの基本相性（300〜350字） ===
 [1] ふたりの相性を一言で。（1文）
