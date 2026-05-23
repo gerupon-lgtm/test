@@ -75,7 +75,7 @@ export default async function handler(req, res) {
       rokuseScore: rokuseScoreA, bioScore: bioScoreA,
       physical: phy, emotional: emo, intellectual: int_,
       rokuseA, nenunA, tsukinA, hiUnA, fiveScores: fiveScoresA,
-      diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
+      diagnosis: diagText, usedModel: result1.model, targetDate: judgeDateStr,
       weeklyData, monthlyData, bioGraph,
     });
   }
@@ -107,7 +107,7 @@ export default async function handler(req, res) {
     Math.round(compat.score * 0.40 + nenunAvg * 0.30 + hiUnAvg * 0.30)
   ));
 
-  const prompt = buildPairPrompt({
+  const prompts = buildPairPrompt({
     nameA: nameA || "Aさん", nameB: nameB || "Bさん",
     birthA, birthB, genderA, genderB,
     rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB,
@@ -115,49 +115,17 @@ export default async function handler(req, res) {
     physical: phyP, emotional: emoP, intellectual: intP_,
     rokuseScore: rokuseScorePair, bioScore: bioScorePair, judgeDateStr, isToday,
   });
-  const result = await callGemini(GEMINI_API_KEY, prompt);
-  if (result.error) return res.status(502).json({ error: result.error });
-  let diagText = sanitizeDateWords(result.text, judgeDateStr);
 
-  let baseDiagnosis = "", dailyDiagnosis = "";
+  // 基本相性とこの日の運気を並列で生成
+  const [result1, result2] = await Promise.all([
+    callGemini(GEMINI_API_KEY, prompts.prompt1),
+    callGemini(GEMINI_API_KEY, prompts.prompt2),
+  ]);
+  if (result1.error) return res.status(502).json({ error: result1.error });
+  if (result2.error) return res.status(502).json({ error: result2.error });
 
-  // SEPARATORの表記ゆれにも対応（全角スペース・改行混入・短縮形）
-  const SEP_PATTERNS = [
-    "===SEPARATOR===",
-    "=== SEPARATOR ===",
-    "===separator===",
-    "＝＝＝SEPARATOR＝＝＝",
-  ];
-  let sepIdx = -1, sepLen = 15;
-  for (const pat of SEP_PATTERNS) {
-    const idx = diagText.indexOf(pat);
-    if (idx !== -1) { sepIdx = idx; sepLen = pat.length; break; }
-  }
-
-  if (sepIdx !== -1) {
-    baseDiagnosis  = diagText.substring(0, sepIdx).trim();
-    dailyDiagnosis = diagText.substring(sepIdx + sepLen).trim();
-    // セクション見出し行（=== セクション2: ... ===）が残っている場合は除去
-    dailyDiagnosis = dailyDiagnosis.replace(/^={2,}[^\n]*={2,}\n?/, "").trim();
-  } else {
-    // SEPARATORがない場合: 文字数で均等分割（前半=基本相性、後半=日運）
-    const mid = Math.floor(diagText.length * 0.5);
-    const sp  = diagText.indexOf("。", mid);
-    if (sp !== -1 && sp < diagText.length * 0.85) {
-      baseDiagnosis  = diagText.substring(0, sp + 1).trim();
-      dailyDiagnosis = diagText.substring(sp + 1).trim();
-    } else {
-      baseDiagnosis  = diagText;
-      dailyDiagnosis = "";
-    }
-  }
-  // SEPARATORで分割できていても両方に最低限の内容があるか確認
-  // ※50字判定は廃止: SEPARATORが守られていれば必ず2分割として扱う
-  // dailyDiagnosisが空の場合のみ全文をbaseDiagnosisに格納
-  if (!dailyDiagnosis) {
-    baseDiagnosis  = diagText;
-    dailyDiagnosis = "";
-  }
+  const baseDiagnosis  = sanitizeDateWords(result1.text, judgeDateStr);
+  const dailyDiagnosis = sanitizeDateWords(result2.text, judgeDateStr);
 
   let weeklyData = [], monthlyData = [], bioGraph = null;
   try {
@@ -174,7 +142,7 @@ export default async function handler(req, res) {
     compat: compat.label, compatScore: compat.score, daiCompat,
     baseDiagnosis, dailyDiagnosis,
     diagnosis: baseDiagnosis + "\n\n" + dailyDiagnosis,
-    usedModel: result.model, targetDate: judgeDateStr,
+    usedModel: result1.model, targetDate: judgeDateStr,
     weeklyData, monthlyData, bioGraph,
   });
 }
@@ -752,41 +720,24 @@ function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokus
   const daiA = nenunA.isDaiKasai ? "（大殺界の年）" : "";
   const daiB = nenunB.isDaiKasai ? "（大殺界の年）" : "";
 
-  return `あなたは六星占術とバイオリズムに精通した占いライターです。以下のデータに基づいて、わかりやすい言葉で相性を伝えてください。データにない情報は書かないでください。
+  // ペア診断は2回のAPI呼び出しで確実に分割する
+  return { isDouble: true,
+    prompt1: `あなたは六星占術とバイオリズムに精通した占いライターです。以下のデータをもとに、ふたりの基本的な相性を300〜350字で書いてください。
 
-【${nameA}さん】
-六星: ${rokuseA.fullName}（${rokuseA.symbol}） 特性: ${rokuseA.desc}
-今年（${nenunA.year}年）のサイクル: ${nenunA.cycle}${daiA} / 今月: ${tsukinA.cycle}
-判定日の日運: ${hiUnA.cycle}
-
-【${nameB}さん】
-六星: ${rokuseB.fullName}（${rokuseB.symbol}） 特性: ${rokuseB.desc}
-今年（${nenunB.year}年）のサイクル: ${nenunB.cycle}${daiB} / 今月: ${tsukinB.cycle}
-判定日の日運: ${hiUnB.cycle}
-
+【${nameA}さん】六星: ${rokuseA.fullName} 特性: ${rokuseA.desc}
+【${nameB}さん】六星: ${rokuseB.fullName} 特性: ${rokuseB.desc}
 六星の相性: ${compat.label}（スコア${compat.score}）
-バイオリズム相性: 身体${physical}% 感情${emotional}% 知性${intellectual}% → バイオスコア${bioScore}点
-六星相性スコア（六星相性・年運・日運の合算）: ${rokuseScore}点
 
-=== 出力ルール（必ず全て守ること） ===
-形式: プレーンテキストのみ。改行で段落を区切る。
-禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。前置き禁止。
-日付表現: 「今日」「本日」は使わない。「この日」と表現すること。
-セクション区切り: セクション1の末尾とセクション2の先頭の間に「===SEPARATOR===」を1行だけ入れること。他の場所には絶対に入れないこと。「===SEPARATOR===」の前後に見出し行は書かないこと。
-言葉遣い: 専門用語は使わない。サイクル名はそのまま使ってよいが必ず意味を添えること。
-合計文字数: セクション1・2合わせて700〜800字。必ず700字以上書くこと。各セクション最低300字。
+出力ルール: プレーンテキストのみ。マークダウン・箇条書き・見出し・前置き禁止。300〜350字。
+内容: ①相性を一言で ②${rokuseA.name}と${rokuseB.name}の組み合わせの特徴（良い点・注意点） ③長期的なアドバイス`,
 
-=== セクション1: ふたりの基本相性（300〜350字） ===
-[1] ふたりの相性を一言で。（1文）
-[2] ${rokuseA.name}と${rokuseB.name}の組み合わせ（${compat.label}）がどう噛み合うか。どんな場面で相性の良さが出るか、すれ違いやすいポイントは何か。（3文）
-[3] ふたりへの長期的なアドバイス。（1文）
+    prompt2: `あなたは六星占術とバイオリズムに精通した占いライターです。以下のデータをもとに、この日のふたりの運気を350〜450字で書いてください。
 
-===SEPARATOR===
+【${nameA}さん】今年のサイクル: ${nenunA.cycle}${daiA} / この日の日運: ${hiUnA.cycle}
+【${nameB}さん】今年のサイクル: ${nenunB.cycle}${daiB} / この日の日運: ${hiUnB.cycle}
+バイオリズム相性: 身体${physical}% 感情${emotional}% 知性${intellectual}%
 
-=== セクション2: この日のふたりの運気（350〜450字） ===
-[4] この日のふたりの総合的な調子を一言で。（1文）
-[5] ${nameA}さんの今年の流れ（${nenunA.cycle}）とこの日の日運（${hiUnA.cycle}）が、ふたりの関係にどんな影響をもたらすか。（2文）
-[6] ${nameB}さんの今年の流れ（${nenunB.cycle}）とこの日の日運（${hiUnB.cycle}）について同様に。大殺界があれば相手への配慮ある助言を含める。（2文）
-[7] バイオリズムの身体${physical}%・感情${emotional}%・知性${intellectual}%から見た、この日のふたりの波長の合い方。（2文）
-[8] この日のふたりにおすすめの過ごし方や、避けた方がよいことの具体的なアドバイス。（2文）`;
+出力ルール: プレーンテキストのみ。マークダウン・箇条書き・見出し・前置き禁止。「今日」「本日」は「この日」と表現。350〜450字。
+内容: ①この日の総合的な調子 ②${nameA}さんの年運・日運がふたりに与える影響 ③${nameB}さんの年運・日運について${nenunB.isDaiKasai ? '（大殺界のため配慮ある助言を含める）' : ''} ④バイオリズムの波長の合い方 ⑤この日のふたりへの具体的なアドバイス`
+  };
 }
