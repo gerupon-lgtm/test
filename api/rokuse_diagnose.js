@@ -177,46 +177,106 @@ const ROKUSE_DESC = {
   6: "感受性豊か・変化を好む・直感力・神秘的"
 };
 
+// ================================================================
+//  六星占術 運命数表（細木数子式正式計算）
+//  ステップ1: 年・月から運命数(1〜60)を引く
+//  ステップ2: 運命数 - 生日 → 1桁になるまで桁和 → 1〜12
+//  ステップ3: 1〜12を星とプラス/マイナスに対応
+// ================================================================
+
+// 月オフセット（1月=index0、1月の値に加算してmod60）
+const MONTH_OFFSET_NORMAL = [0, 31, 59, 30, 0, 31, 1, 32, 3, 33, 4, 34];
+const MONTH_OFFSET_LEAP   = [0, 31, 60, 31, 1, 32, 2, 33, 4, 34, 5, 35];
+
+function isLeapYear(y) {
+  return (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+}
+
+// 年・月から運命数(1〜60)を取得
+function getUnmeiBase(year, month) {
+  // 1950年1月=33 を基準に毎年 +5（閏年は+6）
+  let base = 33;
+  for (let y = 1950; y < year; y++) {
+    base += isLeapYear(y) ? 6 : 5;
+  }
+  const janBase = ((base - 1) % 60) + 1;
+  const offsets = isLeapYear(year) ? MONTH_OFFSET_LEAP : MONTH_OFFSET_NORMAL;
+  const raw = janBase + offsets[month - 1];
+  return ((raw - 1 + 120) % 60) + 1;
+}
+
+// 干支テーブル（陽の干支=プラス）
+const ETO_YO = [true,false,true,false,true,false,true,false,true,false,true,false];
+// 子(1900年基準=0)から順に 陽,陰,陽,陰...
+
+function getEtoSign(year) {
+  const idx = ((year - 1900) % 12 + 12) % 12;
+  return ETO_YO[idx] ? "+" : "−";
+}
+
+// 霊合星人の副星テーブル（主星→副星）
+const REIGOU_PAIR = {
+  1: 2, // 土星人霊合: 副=金星人
+  2: 3, // 金星人霊合: 副=火星人
+  3: 6, // 火星人霊合: 副=水星人
+  4: 5, // 天王星人霊合: 副=木星人
+  5: 4, // 木星人霊合: 副=天王星人
+  6: 3, // 水星人霊合: 副=火星人
+};
+
+// 生の差分から星番号(1〜6)と霊合フラグを取得
+function calcStarFromRaw(raw) {
+  // 霊合判定: 10の倍数
+  const isReigou = (raw % 10 === 0);
+  let n = raw;
+  while (n > 12) {
+    n = String(n).split('').reduce((a, c) => a + parseInt(c), 0);
+  }
+  if (n <= 0) n = 12;
+  // n は1〜12。プラス/マイナスは干支で決まるので星番号(1〜6)に正規化
+  const star = n > 6 ? n - 6 : n;
+  return { star, isReigou };
+}
+
 function calcRokuse(birthStr) {
   const d = new Date(birthStr + "T00:00:00");
   const year  = d.getFullYear();
   const month = d.getMonth() + 1;
   const day   = d.getDate();
 
-  // 六星占術では、1月1日生まれは前年として計算
-  const adjustedYear = (month === 1 && day === 1) ? year - 1 : year;
+  const unmeiBase = getUnmeiBase(year, month);
+  let raw = unmeiBase - day;
+  if (raw <= 0) raw += 60;
 
-  // 年の各桁を繰り返し足して1〜9に
-  let n = digitSum(adjustedYear);
+  const { star, isReigou } = calcStarFromRaw(raw);
+  // プラス/マイナスは生まれ年の干支で決定（正式ルール）
+  const sign = getEtoSign(year);
 
-  // 六星の周期は6なので mod6 (0→6)
-  let star = n % 6;
-  if (star === 0) star = 6;
-
-  // プラス・マイナス判定
-  // 大きく分類: 奇数年生まれ → プラス / 偶数年生まれ → マイナス（簡易版）
-  const sign = (adjustedYear % 2 === 1) ? "+" : "−";
+  const pairStar = isReigou ? REIGOU_PAIR[star] : null;
+  const reigouDesc = isReigou
+    ? `${ROKUSE_NAMES[star]}と${ROKUSE_NAMES[pairStar]}の気質を持つ霊合星人`
+    : null;
 
   return {
     star,
     name: ROKUSE_NAMES[star],
     symbol: ROKUSE_SYMBOLS[star],
     color: ROKUSE_COLORS[star],
-    desc: ROKUSE_DESC[star],
+    desc: isReigou
+      ? `${ROKUSE_DESC[star]}・${ROKUSE_DESC[pairStar]}（霊合）`
+      : ROKUSE_DESC[star],
     sign,
-    fullName: ROKUSE_NAMES[star] + sign,
-    birthYear: adjustedYear,
+    fullName: ROKUSE_NAMES[star] + sign + (isReigou ? "（霊合）" : ""),
+    isReigou,
+    pairStar,
+    pairName: pairStar ? ROKUSE_NAMES[pairStar] : null,
+    reigouDesc,
+    raw,
+    unmeiBase,
+    birthYear: year,
     birthMonth: month,
     birthDay: day,
   };
-}
-
-function digitSum(n) {
-  let s = Math.abs(n);
-  while (s >= 10) {
-    s = String(s).split('').reduce((a, c) => a + parseInt(c), 0);
-  }
-  return s === 0 ? 6 : s;
 }
 
 // ================================================================
@@ -231,17 +291,25 @@ const CYCLE_NAMES = [
 const DAI_KASAI_SET = new Set(["大殺界（壊）", "大殺界（乱）", "大殺界（種）"]);
 const SMALL_KASAI_SET = new Set(["小殺界"]);
 
-// 六星ごとの年サイクル開始オフセット（star → 年開始インデックス）
-// 六星占術では1984年を基準に周期が知られている
-// 各星の年サイクル: star 1(土星) 基準年1984→種
-// 実際の実装: star番号ごとに起点年を設定し mod12
-const STAR_BASE_YEAR = {
-  1: 1984, // 土星人: 1984年=種
-  2: 1985, // 金星人
-  3: 1986, // 火星人
-  4: 1987, // 天王星人
-  5: 1988, // 木星人
-  6: 1989, // 水星人
+// 六星ごとの年サイクル開始オフセット
+// プラスとマイナスでサイクルが異なる
+// プラスの基準年（その年が「種」）
+const STAR_BASE_YEAR_PLUS = {
+  1: 1984, // 土星人+
+  2: 1988, // 金星人+
+  3: 1986, // 火星人+
+  4: 1990, // 天王星人+
+  5: 1988, // 木星人+
+  6: 1992, // 水星人+
+};
+// マイナスの基準年
+const STAR_BASE_YEAR_MINUS = {
+  1: 1985, // 土星人-
+  2: 1983, // 金星人-
+  3: 1987, // 火星人-
+  4: 1985, // 天王星人-
+  5: 1989, // 木星人-
+  6: 1987, // 水星人-
 };
 
 // サイクル説明
@@ -267,20 +335,21 @@ const CYCLE_SCORE = {
   "小殺界": 28, "大殺界（種）": 18, "大殺界（乱）": 15, "大殺界（壊）": 12,
 };
 
-function getCycleIndex(star, year) {
-  const base = STAR_BASE_YEAR[star] || 1984;
+function getCycleIndex(star, sign, year) {
+  const baseMap = (sign === "+") ? STAR_BASE_YEAR_PLUS : STAR_BASE_YEAR_MINUS;
+  const base = baseMap[star] || 1984;
   let idx = (year - base) % 12;
   if (idx < 0) idx += 12;
   return idx;
 }
 
-function getCycleName(star, year) {
-  return CYCLE_NAMES[getCycleIndex(star, year)];
+function getCycleName(star, sign, year) {
+  return CYCLE_NAMES[getCycleIndex(star, sign, year)];
 }
 
 // 年運
 function calcNenun(rokuse, year) {
-  const cycle = getCycleName(rokuse.star, year);
+  const cycle = getCycleName(rokuse.star, rokuse.sign, year);
   const isDaiKasai = DAI_KASAI_SET.has(cycle);
   const isSmallKasai = SMALL_KASAI_SET.has(cycle);
   const score = CYCLE_SCORE[cycle] ?? 50;
@@ -296,7 +365,7 @@ function calcNenun(rokuse, year) {
 
 // 月運: 年サイクルインデックス基準でさらに月でずらす
 function calcTsukinun(rokuse, year, month) {
-  const baseIdx = getCycleIndex(rokuse.star, year);
+  const baseIdx = getCycleIndex(rokuse.star, rokuse.sign, year);
   // 月運は年運インデックスを起点に1月ずつ進む
   const monthOffset = month - 1;
   const cycleIdx = (baseIdx + monthOffset) % 12;
@@ -319,7 +388,7 @@ function calcHiun(rokuse, dateStr) {
   const month = d.getMonth() + 1;
   const day   = d.getDate();
 
-  const monthIdx = (getCycleIndex(rokuse.star, year) + (month - 1)) % 12;
+  const monthIdx = (getCycleIndex(rokuse.star, rokuse.sign, year) + (month - 1)) % 12;
   const dayIdx = (monthIdx + (day - 1)) % 12;
   const cycle = CYCLE_NAMES[dayIdx];
   const isDaiKasai = DAI_KASAI_SET.has(cycle);
