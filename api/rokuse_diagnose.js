@@ -205,13 +205,14 @@ function getUnmeiBase(year, month) {
   return ((raw - 1 + 120) % 60) + 1;
 }
 
-// 干支テーブル（陽の干支=プラス）
-const ETO_YO = [true,false,true,false,true,false,true,false,true,false,true,false];
-// 子(1900年基準=0)から順に 陽,陰,陽,陰...
+// 干支符号テーブル（1900年=子 を index0 として）
+// 陰(-): 子寅辰午申戌 → index 0,2,4,6,8,10
+// 陽(+): 丑卯巳未酉亥 → index 1,3,5,7,9,11
+const ETO_SIGN = ["-","+","-","+","-","+","-","+","-","+","-","+"];
 
 function getEtoSign(year) {
   const idx = ((year - 1900) % 12 + 12) % 12;
-  return ETO_YO[idx] ? "+" : "−";
+  return ETO_SIGN[idx];
 }
 
 // 霊合星人の副星テーブル（主星→副星）
@@ -224,18 +225,15 @@ const REIGOU_PAIR = {
   6: 3, // 水星人霊合: 副=火星人
 };
 
-// 生の差分から星番号(1〜6)と霊合フラグを取得
-function calcStarFromRaw(raw) {
-  // 霊合判定: 10の倍数
-  const isReigou = (raw % 10 === 0);
-  let n = raw;
-  while (n > 12) {
-    n = String(n).split('').reduce((a, c) => a + parseInt(c), 0);
-  }
-  if (n <= 0) n = 12;
-  // n は1〜12。プラス/マイナスは干支で決まるので星番号(1〜6)に正規化
-  const star = n > 6 ? n - 6 : n;
-  return { star, isReigou };
+// 星数(1〜60)から運命星(1〜6)を取得
+// 0〜10:土星, 11〜20:金星, 21〜30:火星, 31〜40:天王, 41〜50:木星, 51〜60:水星
+function starFromSeiSu(seiSu) {
+  if (seiSu <= 10) return 1;
+  if (seiSu <= 20) return 2;
+  if (seiSu <= 30) return 3;
+  if (seiSu <= 40) return 4;
+  if (seiSu <= 50) return 5;
+  return 6;
 }
 
 function calcRokuse(birthStr) {
@@ -244,15 +242,18 @@ function calcRokuse(birthStr) {
   const month = d.getMonth() + 1;
   const day   = d.getDate();
 
+  // 星数 = 運命数 - 1 + 生日（61以上は-60）
   const unmeiBase = getUnmeiBase(year, month);
-  let raw = unmeiBase - day;
-  if (raw <= 0) raw += 60;
+  let seiSu = unmeiBase - 1 + day;
+  if (seiSu > 60) seiSu -= 60;
 
-  const { star, isReigou } = calcStarFromRaw(raw);
-  // プラス/マイナスは生まれ年の干支で決定（正式ルール）
-  const sign = getEtoSign(year);
+  // 霊合判定: 星数が10の倍数
+  const isReigou = (seiSu % 10 === 0);
 
-  const pairStar = isReigou ? REIGOU_PAIR[star] : null;
+  const star     = starFromSeiSu(seiSu);
+  const sign     = getEtoSign(year); // 干支で決定
+
+  const pairStar  = isReigou ? REIGOU_PAIR[star] : null;
   const reigouDesc = isReigou
     ? `${ROKUSE_NAMES[star]}と${ROKUSE_NAMES[pairStar]}の気質を持つ霊合星人`
     : null;
@@ -271,7 +272,7 @@ function calcRokuse(birthStr) {
     pairStar,
     pairName: pairStar ? ROKUSE_NAMES[pairStar] : null,
     reigouDesc,
-    raw,
+    seiSu,
     unmeiBase,
     birthYear: year,
     birthMonth: month,
