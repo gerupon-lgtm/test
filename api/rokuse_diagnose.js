@@ -205,16 +205,12 @@ function getUnmeiBase(year, month) {
   return ((raw - 1 + 120) % 60) + 1;
 }
 
-// 干支符号テーブル（1900年=子 を index0 として）
-// 六星占術独自ルール（一般的な陰陽と逆）:
-// +(陽): 子寅辰午申戌 → index 0,2,4,6,8,10
-// -(陰): 丑卯巳未酉亥 → index 1,3,5,7,9,11
-// 根拠: fortune.netoff.co.jp表より 1960年子+=確認済み
-const ETO_SIGN = ["+","-","+","-","+","-","+","-","+","-","+","-"];
-
-function getEtoSign(year) {
-  const idx = ((year - 1900) % 12 + 12) % 12;
-  return ETO_SIGN[idx];
+// プラス/マイナスは星数で決まる（干支ではなく星数の範囲）
+// 星数 1〜30 → マイナス(−)
+// 星数 31〜60 → プラス(+)
+// 根拠: 1972/1/17(星数44)=木星人+、1972/4/8(星数6)=土星人− で検証済み
+function getSignFromSeiSu(seiSu) {
+  return seiSu > 30 ? "+" : "−";
 }
 
 // 霊合星人の副星テーブル（主星→副星）
@@ -253,7 +249,7 @@ function calcRokuse(birthStr) {
   const isReigou = (seiSu % 10 === 0);
 
   const star     = starFromSeiSu(seiSu);
-  const sign     = getEtoSign(year); // 干支で決定
+  const sign     = getSignFromSeiSu(seiSu); // 星数で決定
 
   const pairStar  = isReigou ? REIGOU_PAIR[star] : null;
   const reigouDesc = isReigou
