@@ -75,7 +75,7 @@ export default async function handler(req, res) {
       rokuseScore: rokuseScoreA, bioScore: bioScoreA,
       physical: phy, emotional: emo, intellectual: int_,
       rokuseA, nenunA, tsukinA, hiUnA, fiveScores: fiveScoresA,
-      diagnosis: diagText, usedModel: result1.model, targetDate: judgeDateStr,
+      diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
       weeklyData, monthlyData, bioGraph,
     });
   }
