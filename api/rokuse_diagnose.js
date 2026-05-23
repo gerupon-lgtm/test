@@ -116,12 +116,12 @@ export default async function handler(req, res) {
     rokuseScore: rokuseScorePair, bioScore: bioScorePair, judgeDateStr, isToday,
   });
 
-  // 基本相性とこの日の運気を並列で生成
-  const [result1, result2] = await Promise.all([
-    callGemini(GEMINI_API_KEY, prompts.prompt1),
-    callGemini(GEMINI_API_KEY, prompts.prompt2),
-  ]);
+  // 基本相性とこの日の運気を順番に生成（レート制限回避のため直列）
+  const result1 = await callGemini(GEMINI_API_KEY, prompts.prompt1);
   if (result1.error) return res.status(502).json({ error: result1.error });
+  // 連続呼び出しによるレート制限を避けるため少し待機
+  await new Promise(r => setTimeout(r, 500));
+  const result2 = await callGemini(GEMINI_API_KEY, prompts.prompt2);
   if (result2.error) return res.status(502).json({ error: result2.error });
 
   const baseDiagnosis  = sanitizeDateWords(result1.text, judgeDateStr);
