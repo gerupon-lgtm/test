@@ -41,11 +41,11 @@ export default async function handler(req, res) {
   const phy  = Math.round(((bioA.physical + 1) / 2) * 100);
   const emo  = Math.round(((bioA.emotional + 1) / 2) * 100);
   const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
-  const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
-
-  // 総合スコア: バイオ35% + 年運15% + 月運15% + 日運35%
-  const overallA = Math.min(100, Math.max(0,
-    Math.round(bioBase * 0.35 + nenunA.score * 0.15 + tsukinA.score * 0.15 + hiUnA.score * 0.35)
+  // バイオリズムスコア: 身体30% + 感情40% + 知性30%
+  const bioScoreA = Math.min(100, Math.max(0, Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3)));
+  // 六星スコア: 年運30% + 月運30% + 日運40%
+  const rokuseScoreA = Math.min(100, Math.max(0,
+    Math.round(nenunA.score * 0.30 + tsukinA.score * 0.30 + hiUnA.score * 0.40)
   ));
 
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
       rokuse: rokuseA, nenun: nenunA, tsukinun: tsukinA, hiun: hiUnA,
       fiveScores: fiveScoresA,
       physical: phy, emotional: emo, intellectual: int_,
-      overallScore: overallA, judgeDateStr, isToday,
+      rokuseScore: rokuseScoreA, bioScore: bioScoreA, judgeDateStr, isToday,
     });
     const result = await callGemini(GEMINI_API_KEY, prompt);
     if (result.error) return res.status(502).json({ error: result.error });
@@ -72,7 +72,8 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       mode: "solo",
-      overallScore: overallA, physical: phy, emotional: emo, intellectual: int_,
+      rokuseScore: rokuseScoreA, bioScore: bioScoreA,
+      physical: phy, emotional: emo, intellectual: int_,
       rokuseA, nenunA, tsukinA, hiUnA, fiveScores: fiveScoresA,
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
       weeklyData, monthlyData, bioGraph,
@@ -91,18 +92,20 @@ export default async function handler(req, res) {
   const compat    = calcRokuseCompat(rokuseA, rokuseB);
   const daiCompat = calcDaiKasaiCompat(nenunA, nenunB);
 
-  // 年運・日運の平均スコアによる相性補正
+  // 年運・日運の平均スコアによる六星相性スコア
   const nenunAvg = Math.round((nenunA.score + nenunB.score) / 2);
   const hiUnAvg  = Math.round((hiUnA.score  + hiUnB.score)  / 2);
 
-  // 総合相性: バイオ30% + 六星相性30% + 年運平均20% + 日運平均20%
-  const overallPair = Math.min(100, Math.max(0,
-    Math.round(bioCompat * 0.30 + compat.score * 0.30 + nenunAvg * 0.20 + hiUnAvg * 0.20)
-  ));
-
+  // バイオリズム相性スコア
   const phyP  = Math.round((1 - Math.abs(bioA.physical  - bioB.physical)  / 2) * 100);
   const emoP  = Math.round((1 - Math.abs(bioA.emotional - bioB.emotional) / 2) * 100);
   const intP_ = Math.round((1 - Math.abs(bioA.intellectual - bioB.intellectual) / 2) * 100);
+  const bioScorePair = Math.min(100, Math.max(0, Math.round(bioCompat)));
+
+  // 六星相性スコア: 六星相性40% + 年運平均30% + 日運平均30%
+  const rokuseScorePair = Math.min(100, Math.max(0,
+    Math.round(compat.score * 0.40 + nenunAvg * 0.30 + hiUnAvg * 0.30)
+  ));
 
   const prompt = buildPairPrompt({
     nameA: nameA || "Aさん", nameB: nameB || "Bさん",
@@ -110,7 +113,7 @@ export default async function handler(req, res) {
     rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB,
     compat, daiCompat,
     physical: phyP, emotional: emoP, intellectual: intP_,
-    overallScore: overallPair, judgeDateStr, isToday,
+    rokuseScore: rokuseScorePair, bioScore: bioScorePair, judgeDateStr, isToday,
   });
   const result = await callGemini(GEMINI_API_KEY, prompt);
   if (result.error) return res.status(502).json({ error: result.error });
@@ -165,7 +168,8 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     mode: "pair",
-    overallScore: overallPair, physical: phyP, emotional: emoP, intellectual: intP_,
+    rokuseScore: rokuseScorePair, bioScore: bioScorePair,
+    physical: phyP, emotional: emoP, intellectual: intP_,
     rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB,
     compat: compat.label, compatScore: compat.score, daiCompat,
     baseDiagnosis, dailyDiagnosis,
@@ -717,7 +721,8 @@ function buildSoloPrompt({ name, birthA, genderA, rokuse, nenun, tsukinun, hiun,
 判定日の日運サイクル: ${hiun.cycle}（${hiun.desc}）${hiDaiW ? " ※" + hiDaiW : ""}
 
 バイオリズム（0%=最低〜100%=最高）:
-身体${physical}% 感情${emotional}% 知性${intellectual}% 総合${overallScore}点
+身体${physical}% 感情${emotional}% 知性${intellectual}% → バイオリズムスコア${bioScore}点
+六星サイクルスコア（年運・月運・日運の合算）: ${rokuseScore}点
 
 各運勢スコア（0〜100）:
 金運${fiveScores.money} 恋愛運${fiveScores.love} 仕事運${fiveScores.work} 健康運${fiveScores.health} 対人運${fiveScores.social}
@@ -760,8 +765,8 @@ function buildPairPrompt({ nameA, nameB, birthA, birthB, genderA, genderB, rokus
 判定日の日運: ${hiUnB.cycle}
 
 六星の相性: ${compat.label}（スコア${compat.score}）
-バイオリズム相性: 身体${physical}% 感情${emotional}% 知性${intellectual}%
-総合相性スコア: ${overallScore}%
+バイオリズム相性: 身体${physical}% 感情${emotional}% 知性${intellectual}% → バイオスコア${bioScore}点
+六星相性スコア（六星相性・年運・日運の合算）: ${rokuseScore}点
 
 === 出力ルール（必ず全て守ること） ===
 形式: プレーンテキストのみ。改行で段落を区切る。
