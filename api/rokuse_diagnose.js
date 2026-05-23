@@ -147,14 +147,14 @@ export default async function handler(req, res) {
       baseDiagnosis  = diagText.substring(0, sp + 1).trim();
       dailyDiagnosis = diagText.substring(sp + 1).trim();
     } else {
-      // どうしても分割できない場合は全文を基本相性に
       baseDiagnosis  = diagText;
       dailyDiagnosis = "";
     }
   }
-
-  // どちらかが極端に短い（50字未満）場合は全文を基本相性として扱う
-  if (dailyDiagnosis.length < 50) {
+  // SEPARATORで分割できていても両方に最低限の内容があるか確認
+  // ※50字判定は廃止: SEPARATORが守られていれば必ず2分割として扱う
+  // dailyDiagnosisが空の場合のみ全文をbaseDiagnosisに格納
+  if (!dailyDiagnosis) {
     baseDiagnosis  = diagText;
     dailyDiagnosis = "";
   }
