@@ -238,10 +238,10 @@ function starFromSeiSu(seiSu) {
 }
 
 function calcRokuse(birthStr) {
-  const d = new Date(birthStr + "T00:00:00");
-  const year  = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day   = d.getDate();
+  const d = new Date(birthStr + "T00:00:00Z");
+  const year  = d.getUTCFullYear();
+  const month = d.getUTCMonth() + 1;
+  const day   = d.getUTCDate();
 
   // 星数 = 運命数 - 1 + 生日（61以上は-60）
   const unmeiBase = getUnmeiBase(year, month);
@@ -396,10 +396,11 @@ const DAY_OFFSET = {
   "5+": 2, "5-": 1,  // 木星人
   "6+": 4, "6-": 3,  // 水星人
 };
-const DAY_BASE = new Date("2026-02-01T00:00:00");
+const DAY_BASE = new Date("2026-02-01T00:00:00Z"); // UTC明示
 
 function calcHiun(rokuse, dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
+  // UTC midnight として解釈（タイムゾーンに依存しない日付計算）
+  const d = new Date(dateStr + "T00:00:00Z");
   const diff = Math.round((d - DAY_BASE) / 86400000);
   const key = rokuse.star + rokuse.sign;
   const offset = DAY_OFFSET[key] ?? 0;
@@ -516,13 +517,13 @@ function calcFiveScores(rokuse, nenun, hiun, bio, gender) {
 
 function buildRangeData(rokuseA, birthA, baseDateStr, days, rokuseB, birthB) {
   const result = [];
-  const baseDate = new Date(baseDateStr + "T00:00:00");
+  const baseDate = new Date(baseDateStr + "T00:00:00Z");
   for (let i = 0; i < days; i++) {
     const d = new Date(baseDate);
-    d.setDate(d.getDate() + i);
+    d.setUTCDate(d.getUTCDate() + i);
     const ds = d.toISOString().slice(0, 10);
     const hiA = calcHiun(rokuseA, ds);
-    const bioA = calcBiorhythm(diffDays(new Date(birthA), d));
+    const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), d));
 
     const entry = { date: ds, cycle: hiA.cycle, isDaiKasai: hiA.isDaiKasai };
 
@@ -535,7 +536,7 @@ function buildRangeData(rokuseA, birthA, baseDateStr, days, rokuseB, birthB) {
       entry.hiScore = hiA.score;
     } else {
       const hiB  = calcHiun(rokuseB, ds);
-      const bioB = calcBiorhythm(diffDays(new Date(birthB), d));
+      const bioB = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), d));
       const bioCompat = calcBioCompat(bioA, bioB);
       const rComp = calcRokuseCompat(rokuseA, rokuseB);
       const avgHi = (hiA.score + hiB.score) / 2;
@@ -553,22 +554,22 @@ function buildRangeData(rokuseA, birthA, baseDateStr, days, rokuseB, birthB) {
 // ================================================================
 
 function buildBioGraphData(birthA, baseDateStr, span, birthB) {
-  const baseDate = new Date(baseDateStr + "T00:00:00");
+  const baseDate = new Date(baseDateStr + "T00:00:00Z");
   const half = Math.floor(span / 2);
   const result = { labels: [], a: { physical: [], emotional: [], intellectual: [] } };
   if (birthB) result.b = { physical: [], emotional: [], intellectual: [] };
 
   for (let i = -half; i <= half; i++) {
     const d = new Date(baseDate);
-    d.setDate(d.getDate() + i);
+    d.setUTCDate(d.getUTCDate() + i);
     const ds = d.toISOString().slice(0, 10);
     result.labels.push(ds);
-    const bioA = calcBiorhythm(diffDays(new Date(birthA), d));
+    const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), d));
     result.a.physical.push(   Math.round(((bioA.physical    + 1) / 2) * 100));
     result.a.emotional.push(  Math.round(((bioA.emotional   + 1) / 2) * 100));
     result.a.intellectual.push(Math.round(((bioA.intellectual + 1) / 2) * 100));
     if (birthB) {
-      const bioB = calcBiorhythm(diffDays(new Date(birthB), d));
+      const bioB = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), d));
       result.b.physical.push(    Math.round(((bioB.physical    + 1) / 2) * 100));
       result.b.emotional.push(   Math.round(((bioB.emotional   + 1) / 2) * 100));
       result.b.intellectual.push(Math.round(((bioB.intellectual + 1) / 2) * 100));
