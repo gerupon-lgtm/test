@@ -365,12 +365,11 @@ function calcNenun(rokuse, year) {
   };
 }
 
-// 月運: 年サイクルインデックス基準でさらに月でずらす
+// 月運: 正式計算式 = (yearIdx + month + 6) % 12
+// 根拠: plus-a.net 全星種 2026年データから導出・3星種で検証済み
 function calcTsukinun(rokuse, year, month) {
-  const baseIdx = getCycleIndex(rokuse.star, rokuse.sign, year);
-  // 月運は年運インデックスを起点に1月ずつ進む
-  const monthOffset = month - 1;
-  const cycleIdx = (baseIdx + monthOffset) % 12;
+  const yearIdx = getCycleIndex(rokuse.star, rokuse.sign, year);
+  const cycleIdx = (yearIdx + month + 6) % 12;
   const cycle = CYCLE_NAMES[cycleIdx];
   const isDaiKasai = DAI_KASAI_SET.has(cycle);
   const score = CYCLE_SCORE[cycle] ?? 50;
@@ -383,15 +382,24 @@ function calcTsukinun(rokuse, year, month) {
   };
 }
 
-// 日運: 月運インデックスを起点に日ごとに進む
+// 日運: 共通基準日(2026-02-01)から星ごとの固定オフセットで計算
+// 根拠: plus-a.net 全12星種 2026年2月1日一覧表から導出・全件検証済み
+const DAY_OFFSET = {
+  "1+": 6, "1-": 5,  // 土星人
+  "2+": 8, "2-": 7,  // 金星人
+  "3+":10, "3-": 9,  // 火星人
+  "4+": 0, "4-":11,  // 天王星人
+  "5+": 2, "5-": 1,  // 木星人
+  "6+": 4, "6-": 3,  // 水星人
+};
+const DAY_BASE = new Date("2026-02-01T00:00:00");
+
 function calcHiun(rokuse, dateStr) {
   const d = new Date(dateStr + "T00:00:00");
-  const year  = d.getFullYear();
-  const month = d.getMonth() + 1;
-  const day   = d.getDate();
-
-  const monthIdx = (getCycleIndex(rokuse.star, rokuse.sign, year) + (month - 1)) % 12;
-  const dayIdx = (monthIdx + (day - 1)) % 12;
+  const diff = Math.round((d - DAY_BASE) / 86400000);
+  const key = rokuse.star + rokuse.sign;
+  const offset = DAY_OFFSET[key] ?? 0;
+  const dayIdx = ((diff + offset) % 12 + 12) % 12;
   const cycle = CYCLE_NAMES[dayIdx];
   const isDaiKasai = DAI_KASAI_SET.has(cycle);
   const isSmallKasai = SMALL_KASAI_SET.has(cycle);
