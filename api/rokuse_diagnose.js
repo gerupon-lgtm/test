@@ -23,17 +23,17 @@ export default async function handler(req, res) {
     const now = new Date();
     judgeDateStr = now.toLocaleDateString("en-CA", { timeZone: tz });
   }
-  const judgeDate = new Date(judgeDateStr + "T00:00:00");
+  const judgeDate = new Date(judgeDateStr + "T00:00:00Z");
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const isToday = judgeDateStr === todayStr;
 
   // ======== 六星算出 ========
   const rokuseA = calcRokuse(birthA);
-  const bioA = calcBiorhythm(diffDays(new Date(birthA), judgeDate));
+  const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), judgeDate));
 
   // 年運・月運・日運
-  const nenunA  = calcNenun(rokuseA, judgeDate.getFullYear());
-  const tsukinA = calcTsukinun(rokuseA, judgeDate.getFullYear(), judgeDate.getMonth() + 1);
+  const nenunA  = calcNenun(rokuseA, judgeDate.getUTCFullYear());
+  const tsukinA = calcTsukinun(rokuseA, judgeDate.getUTCFullYear(), judgeDate.getUTCMonth() + 1);
   const hiUnA   = calcHiun(rokuseA, judgeDateStr);
 
   const fiveScoresA = calcFiveScores(rokuseA, nenunA, hiUnA, bioA, genderA);
@@ -82,9 +82,9 @@ export default async function handler(req, res) {
 
   // ======== 相性診断 ========
   const rokuseB = calcRokuse(birthB);
-  const bioB    = calcBiorhythm(diffDays(new Date(birthB), judgeDate));
-  const nenunB  = calcNenun(rokuseB, judgeDate.getFullYear());
-  const tsukinB = calcTsukinun(rokuseB, judgeDate.getFullYear(), judgeDate.getMonth() + 1);
+  const bioB    = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), judgeDate));
+  const nenunB  = calcNenun(rokuseB, judgeDate.getUTCFullYear());
+  const tsukinB = calcTsukinun(rokuseB, judgeDate.getUTCFullYear(), judgeDate.getUTCMonth() + 1);
   const hiUnB   = calcHiun(rokuseB, judgeDateStr);
 
   // 相性スコア計算
