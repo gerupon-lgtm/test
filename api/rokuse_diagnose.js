@@ -216,18 +216,39 @@ function getSignFromSeiSu(seiSu) {
   return seiSu > 30 ? "+" : "−";
 }
 
-// 霊合星人の副星テーブル（主星→副星）
+// 霊合星人の副星テーブル（正式: 土星⇔天王星, 金星⇔木星, 火星⇔水星）
 const REIGOU_PAIR = {
-  1: 2, // 土星人霊合: 副=金星人
-  2: 3, // 金星人霊合: 副=火星人
+  1: 4, // 土星人霊合: 副=天王星人
+  2: 5, // 金星人霊合: 副=木星人
   3: 6, // 火星人霊合: 副=水星人
-  4: 5, // 天王星人霊合: 副=木星人
-  5: 4, // 木星人霊合: 副=天王星人
+  4: 1, // 天王星人霊合: 副=土星人
+  5: 2, // 木星人霊合: 副=金星人
   6: 3, // 水星人霊合: 副=火星人
 };
 
+// 霊合判定テーブル: 各星人が停止(10)になる干支インデックス
+// 干支: 子=0,丑=1,寅=2,卯=3,辰=4,巳=5,午=6,未=7,申=8,酉=9,戌=10,亥=11
+// 根拠: STAR_BASE_YEAR+10 で停止年を算出し干支インデックスを確認
+const REIGOU_ETO = {
+  "1+": 10, // 土星人+: 戌年生まれが霊合
+  "1−": 11, // 土星人-: 亥年生まれが霊合
+  "2+":  8, // 金星人+: 申年生まれが霊合
+  "2−":  9, // 金星人-: 酉年生まれが霊合
+  "3+":  0, // 火星人+: 子年生まれが霊合
+  "3−":  1, // 火星人-: 丑年生まれが霊合
+  "4+":  4, // 天王星人+: 辰年生まれが霊合
+  "4−":  5, // 天王星人-: 巳年生まれが霊合
+  "5+":  2, // 木星人+: 寅年生まれが霊合
+  "5−":  3, // 木星人-: 卯年生まれが霊合
+  "6+":  6, // 水星人+: 午年生まれが霊合
+  "6−":  1, // 水星人-: 丑年生まれが霊合
+};
+
+function getEtoIndex(year) {
+  return ((year - 1900) % 12 + 12) % 12;
+}
+
 // 星数(1〜60)から運命星(1〜6)を取得
-// 0〜10:土星, 11〜20:金星, 21〜30:火星, 31〜40:天王, 41〜50:木星, 51〜60:水星
 function starFromSeiSu(seiSu) {
   if (seiSu <= 10) return 1;
   if (seiSu <= 20) return 2;
@@ -243,18 +264,18 @@ function calcRokuse(birthStr) {
   const month = d.getUTCMonth() + 1;
   const day   = d.getUTCDate();
 
-  // 星数 = 運命数 - 1 + 生日（61以上は-60）
   const unmeiBase = getUnmeiBase(year, month);
   let seiSu = unmeiBase - 1 + day;
   if (seiSu > 60) seiSu -= 60;
 
-  // 霊合判定: 星数が10の倍数
-  const isReigou = (seiSu % 10 === 0);
+  const star = starFromSeiSu(seiSu);
+  const sign = getSignFromSeiSu(seiSu);
 
-  const star     = starFromSeiSu(seiSu);
-  const sign     = getSignFromSeiSu(seiSu); // 星数で決定
+  // 霊合判定: 生まれ年の干支がその星人の停止干支と一致するか
+  const etoIdx  = getEtoIndex(year);
+  const isReigou = (REIGOU_ETO[star + sign] === etoIdx);
 
-  const pairStar  = isReigou ? REIGOU_PAIR[star] : null;
+  const pairStar   = isReigou ? REIGOU_PAIR[star] : null;
   const reigouDesc = isReigou
     ? `${ROKUSE_NAMES[star]}と${ROKUSE_NAMES[pairStar]}の気質を持つ霊合星人`
     : null;
