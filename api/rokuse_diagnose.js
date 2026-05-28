@@ -212,8 +212,13 @@ function getUnmeiBase(year, month) {
 // 星数 1〜30 → マイナス(−)
 // 星数 31〜60 → プラス(+)
 // 根拠: 1972/1/17(星数44)=木星人+、1972/4/8(星数6)=土星人− で検証済み
-function getSignFromSeiSu(seiSu) {
-  return seiSu > 30 ? "+" : "−";
+// 符号は生まれ年の干支で決定（正式ルール）
+// +: 子寅辰午申戌 (index 0,2,4,6,8,10)
+// −: 丑卯巳未酉亥 (index 1,3,5,7,9,11)
+const ETO_SIGN_TABLE = ["+","−","+","−","+","−","+","−","+","−","+","−"];
+function getEtoSign(year) {
+  const idx = ((year - 1900) % 12 + 12) % 12;
+  return ETO_SIGN_TABLE[idx];
 }
 
 // 霊合星人の副星テーブル（正式: 土星⇔天王星, 金星⇔木星, 火星⇔水星）
@@ -269,7 +274,7 @@ function calcRokuse(birthStr) {
   if (seiSu > 60) seiSu -= 60;
 
   const star = starFromSeiSu(seiSu);
-  const sign = getSignFromSeiSu(seiSu);
+  const sign = getEtoSign(year);
 
   // 霊合判定: 生まれ年の干支がその星人の停止干支と一致するか
   const etoIdx  = getEtoIndex(year);
@@ -314,10 +319,12 @@ const CYCLE_NAMES = [
   "再会", "財成", "安定", "陰影", "停止", "減退"
 ];
 
-// 大殺界: 陰影(9)・停止(10)・減退(11)
-const DAI_KASAI_SET = new Set(["陰影", "停止", "減退"]);
-// 中殺界: 乱気(5)・健弱(3) / 小殺界: なし（乱気=中殺界として扱う）
-const SMALL_KASAI_SET = new Set(["健弱", "乱気"]);
+// 大殺界: 陰影(9)・停止(10)・減退(11)  ← Wikipedia確認済み
+const DAI_KASAI_SET   = new Set(["陰影", "停止", "減退"]);
+// 中殺界: 乱気(5)             ← Wikipedia「乱気=中殺界」
+const CHU_KASAI_SET   = new Set(["乱気"]);
+// 小殺界: 健弱(3)             ← Wikipedia「健弱=小殺界」
+const SMALL_KASAI_SET = new Set(["健弱"]);
 
 // 六星ごとの年運基準年（種子=0になる年）
 // plus-a.net 2026年全星種年運データから逆算・全件検証済み
@@ -377,7 +384,8 @@ function getCycleName(star, sign, year) {
 // 年運
 function calcNenun(rokuse, year) {
   const cycle = getCycleName(rokuse.star, rokuse.sign, year);
-  const isDaiKasai = DAI_KASAI_SET.has(cycle);
+  const isDaiKasai   = DAI_KASAI_SET.has(cycle);
+  const isChuKasai   = CHU_KASAI_SET.has(cycle);
   const isSmallKasai = SMALL_KASAI_SET.has(cycle);
   const score = CYCLE_SCORE[cycle] ?? 50;
   return {
@@ -386,6 +394,7 @@ function calcNenun(rokuse, year) {
     desc: CYCLE_DESC[cycle] || "",
     score,
     isDaiKasai,
+    isChuKasai,
     isSmallKasai,
   };
 }
@@ -396,7 +405,9 @@ function calcTsukinun(rokuse, year, month) {
   const yearIdx = getCycleIndex(rokuse.star, rokuse.sign, year);
   const cycleIdx = (yearIdx + month + 6) % 12;
   const cycle = CYCLE_NAMES[cycleIdx];
-  const isDaiKasai = DAI_KASAI_SET.has(cycle);
+  const isDaiKasai   = DAI_KASAI_SET.has(cycle);
+  const isChuKasai   = CHU_KASAI_SET.has(cycle);
+  const isSmallKasai = SMALL_KASAI_SET.has(cycle);
   const score = CYCLE_SCORE[cycle] ?? 50;
   return {
     year, month,
@@ -404,6 +415,8 @@ function calcTsukinun(rokuse, year, month) {
     desc: CYCLE_DESC[cycle] || "",
     score,
     isDaiKasai,
+    isChuKasai,
+    isSmallKasai,
   };
 }
 
@@ -427,7 +440,8 @@ function calcHiun(rokuse, dateStr) {
   const offset = DAY_OFFSET[key] ?? 0;
   const dayIdx = ((diff + offset) % 12 + 12) % 12;
   const cycle = CYCLE_NAMES[dayIdx];
-  const isDaiKasai = DAI_KASAI_SET.has(cycle);
+  const isDaiKasai   = DAI_KASAI_SET.has(cycle);
+  const isChuKasai   = CHU_KASAI_SET.has(cycle);
   const isSmallKasai = SMALL_KASAI_SET.has(cycle);
   const score = CYCLE_SCORE[cycle] ?? 50;
   return {
@@ -436,6 +450,7 @@ function calcHiun(rokuse, dateStr) {
     desc: CYCLE_DESC[cycle] || "",
     score,
     isDaiKasai,
+    isChuKasai,
     isSmallKasai,
   };
 }
