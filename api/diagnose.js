@@ -24,13 +24,13 @@ export default async function handler(req, res) {
     const now = new Date();
     judgeDateStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // YYYY-MM-DD形式
   }
-  const judgeDate = new Date(judgeDateStr + "T00:00:00");
+  const judgeDate = new Date(judgeDateStr + "T12:00:00Z");
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const isToday = judgeDateStr === todayStr;
 
   // ========== 一人目の計算 ==========
   const meishikiA = buildMeishiki(birthA, timeA);
-  const bioA = calcBiorhythm(diffDays(new Date(birthA), judgeDate));
+  const bioA = calcBiorhythm(diffDays(new Date(birthA + "T12:00:00Z"), judgeDate));
   const dayPillar = calcDayPillar(judgeDateStr);
   const fortuneA = calcDailyFortune(meishikiA, dayPillar);
 
@@ -76,7 +76,7 @@ export default async function handler(req, res) {
 
   // ========== 相性診断 ==========
   const meishikiB = buildMeishiki(birthB, timeB);
-  const bioB = calcBiorhythm(diffDays(new Date(birthB), judgeDate));
+  const bioB = calcBiorhythm(diffDays(new Date(birthB + "T12:00:00Z"), judgeDate));
   const fortuneB = calcDailyFortune(meishikiB, dayPillar);
 
   const phy = Math.round((1 - Math.abs(bioA.physical - bioB.physical) / 2) * 100);
@@ -182,8 +182,8 @@ const JUNIUN_TABLE = [
 const SETSUIRI = [0,6,4,6,5,6,7,7,8,8,8,7,7]; // 月1-12の節入り日（index0はダミー）
 
 function buildMeishiki(dateStr, timeStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  const y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+  const d = new Date(dateStr + "T12:00:00Z");
+  const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
 
   // 年柱（立春=2/4前後で切り替え）
   let yearForPillar = y;
@@ -197,16 +197,14 @@ function buildMeishiki(dateStr, timeStr) {
   const setsuiri = SETSUIRI[m] || 6;
   if (day < setsuiri) monthForPillar--;
   if (monthForPillar <= 0) { monthForPillar += 12; yearForPillar--; }
-  // 月干の計算: 年干 × 2 + 月の地支index
-  const monthBranch = ((monthForPillar + 1) % 12); // 1月=寅(2), 2月=卯(3)...
+  const monthBranch = ((monthForPillar + 1) % 12);
   const monthBranchIdx = (monthForPillar + 1) % 12;
-  // 年干から月干を求める（年干×2 + 月支の序数）
   const monthStemBase = (yearStem % 5) * 2;
   const monthStem = (monthStemBase + monthBranchIdx) % 10;
 
-  // 日柱
-  const base = new Date(1900, 0, 1);
-  const daysDiff = Math.floor((d - base) / 86400000);
+  // 日柱（UTC基準で日数計算）
+  const baseMs = Date.UTC(1900, 0, 1);
+  const daysDiff = Math.floor((d.getTime() - baseMs) / 86400000);
   const dayOffset = 10;
   const dayIdx = ((daysDiff + dayOffset) % 60 + 60) % 60;
   const dayStem = dayIdx % 10;
@@ -481,9 +479,9 @@ async function callGemini(apiKey, prompt) {
 // ================================================================
 
 function calcDayPillar(dateStr) {
-  const d = new Date(dateStr + "T00:00:00");
-  const base = new Date(1900, 0, 1);
-  const daysDiff = Math.floor((d - base) / 86400000);
+  const d = new Date(dateStr + "T12:00:00Z");
+  const baseMs = Date.UTC(1900, 0, 1);
+  const daysDiff = Math.floor((d.getTime() - baseMs) / 86400000);
   const offset = 10;
   const idx = ((daysDiff + offset) % 60 + 60) % 60;
   const stemIdx = idx % 10;
@@ -613,14 +611,16 @@ function sanitizeDateWords(text, dateStr) {
 // ================================================================
 function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, birthB) {
   const result = [];
-  const baseDate = new Date(baseDateStr + "T00:00:00");
+  const baseMs = new Date(baseDateStr + "T12:00:00Z").getTime();
+  const birthAMs = new Date(birthA + "T12:00:00Z").getTime();
+  const birthBMs = birthB ? new Date(birthB + "T12:00:00Z").getTime() : 0;
   for (let i = 0; i < days; i++) {
-    const d = new Date(baseDate);
-    d.setDate(d.getDate() + i);
+    const dMs = baseMs + i * 86400000;
+    const d = new Date(dMs);
     const ds = d.toISOString().slice(0, 10);
     const dp = calcDayPillar(ds);
     const fA = calcDailyFortune(meishikiA, dp);
-    const bioA = calcBiorhythm(diffDays(new Date(birthA), d));
+    const bioA = calcBiorhythm(Math.floor((dMs - birthAMs) / 86400000));
 
     const entry = { date: ds, dayPillar: dp.stem + dp.branch, dayElement: dp.elementJP };
 
@@ -634,7 +634,7 @@ function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, b
       entry.tsuhen = fA.tsuhen;
       entry.juniun = fA.juniun;
     } else {
-      const bioB = calcBiorhythm(diffDays(new Date(birthB), d));
+      const bioB = calcBiorhythm(Math.floor((dMs - birthBMs) / 86400000));
       const fB = calcDailyFortune(meishikiB, dp);
       const phy = Math.round((1 - Math.abs(bioA.physical - bioB.physical) / 2) * 100);
       const emo = Math.round((1 - Math.abs(bioA.emotional - bioB.emotional) / 2) * 100);
@@ -655,22 +655,24 @@ function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, b
 //  バイオリズムグラフデータ（前後15日 = 30日分）
 // ================================================================
 function buildBioGraphData(birthA, baseDateStr, span, birthB) {
-  const baseDate = new Date(baseDateStr + "T00:00:00");
+  const baseMs = new Date(baseDateStr + "T12:00:00Z").getTime();
+  const birthAMs = new Date(birthA + "T12:00:00Z").getTime();
+  const birthBMs = birthB ? new Date(birthB + "T12:00:00Z").getTime() : 0;
   const half = Math.floor(span / 2);
   const result = { labels: [], a: { physical: [], emotional: [], intellectual: [] } };
   if (birthB) result.b = { physical: [], emotional: [], intellectual: [] };
 
   for (let i = -half; i <= half; i++) {
-    const d = new Date(baseDate);
-    d.setDate(d.getDate() + i);
+    const dMs = baseMs + i * 86400000;
+    const d = new Date(dMs);
     const ds = d.toISOString().slice(0, 10);
     result.labels.push(ds);
-    const bioA = calcBiorhythm(diffDays(new Date(birthA), d));
+    const bioA = calcBiorhythm(Math.floor((dMs - birthAMs) / 86400000));
     result.a.physical.push(Math.round(((bioA.physical + 1) / 2) * 100));
     result.a.emotional.push(Math.round(((bioA.emotional + 1) / 2) * 100));
     result.a.intellectual.push(Math.round(((bioA.intellectual + 1) / 2) * 100));
     if (birthB) {
-      const bioB = calcBiorhythm(diffDays(new Date(birthB), d));
+      const bioB = calcBiorhythm(Math.floor((dMs - birthBMs) / 86400000));
       result.b.physical.push(Math.round(((bioB.physical + 1) / 2) * 100));
       result.b.emotional.push(Math.round(((bioB.emotional + 1) / 2) * 100));
       result.b.intellectual.push(Math.round(((bioB.intellectual + 1) / 2) * 100));
