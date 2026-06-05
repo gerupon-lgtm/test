@@ -70,11 +70,14 @@ export default async function handler(req, res) {
       bioGraph    = buildBioGraphData(birthA, judgeDateStr, 30);
     } catch (e) { console.error("Range error:", e); }
 
+    const luckyA = calcLucky(rokuseA, hiUnA);
+
     return res.status(200).json({
       mode: "solo",
       rokuseScore: rokuseScoreA, bioScore: bioScoreA,
       physical: phy, emotional: emo, intellectual: int_,
       rokuseA, nenunA, tsukinA, hiUnA, fiveScores: fiveScoresA,
+      lucky: luckyA,
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
       weeklyData, monthlyData, bioGraph,
     });
@@ -134,9 +137,13 @@ export default async function handler(req, res) {
     bioGraph    = buildBioGraphData(birthA, judgeDateStr, 30, birthB);
   } catch (e) { console.error("Range error:", e); }
 
+  const luckyA = calcLucky(rokuseA, hiUnA);
+  const luckyB = calcLucky(rokuseB, hiUnB);
+
   return res.status(200).json({
     mode: "pair",
     rokuseScore: rokuseScorePair, bioScore: bioScorePair,
+    luckyA, luckyB,
     physical: phyP, emotional: emoP, intellectual: intP_,
     rokuseA, rokuseB, nenunA, nenunB, tsukinA, tsukinB, hiUnA, hiUnB,
     compat: compat.label, compatScore: compat.score, daiCompat,
@@ -452,6 +459,145 @@ function calcHiun(rokuse, dateStr) {
     isDaiKasai,
     isChuKasai,
     isSmallKasai,
+  };
+}
+
+
+// ================================================================
+//  ラッキー要素判定
+//  星の属性 × サイクル（日運）から導出（六星占術独自マッピング）
+// ================================================================
+
+// 星ごとの基本属性カラー
+const STAR_BASE_COLORS = {
+  1: ["ブラウン","ゴールド","ベージュ"],     // 土星人: 土=大地の色
+  2: ["ホワイト","シルバー","クリーム"],       // 金星人: 金=白銀
+  3: ["レッド","オレンジ","コーラル"],         // 火星人: 火=炎の色
+  4: ["グリーン","エメラルド","ライム"],       // 天王星人: 木=緑
+  5: ["ブルー","ネイビー","スカイブルー"],     // 木星人: 水=青
+  6: ["パープル","ラベンダー","インディゴ"],   // 水星人: 水=紫
+};
+
+// サイクルごとのカラー補正（日運に応じてカラーが変化）
+const CYCLE_COLOR_ACCENT = {
+  "種子": "イエロー", "緑生": "ライトグリーン", "立花": "ピンク",
+  "健弱": "ライトブルー", "達成": "ゴールド", "乱気": "グレー",
+  "再会": "オレンジ", "財成": "ワインレッド", "安定": "アイボリー",
+  "陰影": "ダークブルー", "停止": "チャコール", "減退": "モスグリーン",
+};
+
+// 星ごとのラッキーナンバーベース
+const STAR_BASE_NUMBERS = {
+  1: [1, 6], 2: [4, 9], 3: [3, 7], 4: [5, 8], 5: [2, 11], 6: [0, 10],
+};
+
+// 星ごとの方位
+const STAR_DIRECTION = {
+  1: "南西",   // 土星人: 土=中央・南西
+  2: "西",     // 金星人: 金=西
+  3: "南",     // 火星人: 火=南
+  4: "東",     // 天王星人: 木=東
+  5: "北",     // 木星人: 水=北
+  6: "北西",   // 水星人: 水=北西
+};
+
+// サイクルごとの方位補正
+const CYCLE_DIRECTION_SUB = {
+  "種子": "北", "緑生": "北東", "立花": "東", "健弱": "東",
+  "達成": "南東", "乱気": "南", "再会": "南西", "財成": "西",
+  "安定": "北西", "陰影": "南", "停止": "西", "減退": "北",
+};
+
+// 星×サイクルのラッキーアイテム
+const STAR_ITEMS = {
+  1: {good: "革製品・時計・天然石", kasai: "お守り・ハンカチ"},
+  2: {good: "アクセサリー・香水・鏡", kasai: "シルバーリング・白い花"},
+  3: {good: "キャンドル・スポーツグッズ・赤い小物", kasai: "アロマオイル・ストレッチマット"},
+  4: {good: "観葉植物・手帳・木製アイテム", kasai: "ハーブティー・深呼吸グッズ"},
+  5: {good: "ノート・ペン・青い小物", kasai: "入浴剤・音楽プレイヤー"},
+  6: {good: "クリスタル・書籍・紫の小物", kasai: "ラベンダーグッズ・日記帳"},
+};
+
+// 星ごとのラッキーフード（五行ベース）
+const STAR_FOODS = {
+  1: {good: "根菜・さつまいも・かぼちゃ・はちみつ", kasai: "生姜湯・梅干し・おかゆ"},
+  2: {good: "白身魚・豆腐・チーズ・梨", kasai: "大根おろし・ヨーグルト・白湯"},
+  3: {good: "唐辛子・ニンニク・トマト・赤ワイン", kasai: "緑茶・サラダ・柑橘類"},
+  4: {good: "葉物野菜・アボカド・オリーブオイル", kasai: "ハーブサラダ・青汁・ナッツ"},
+  5: {good: "魚介類・海藻・ブルーベリー・蕎麦", kasai: "温かいスープ・黒豆・ゴマ"},
+  6: {good: "ぶどう・ベリー類・紫キャベツ・ナス", kasai: "ハーブティー・プルーン・玄米"},
+};
+
+// サイクルごとの開運アクション
+const CYCLE_ACTIONS = {
+  "種子": "新しい習慣の種まき・情報収集・準備",
+  "緑生": "学びの開始・人脈づくり・小さな一歩",
+  "立花": "プレゼン・告白・自己アピール",
+  "健弱": "早寝早起き・軽い運動・体調チェック",
+  "達成": "契約・交渉・大きな決断",
+  "乱気": "瞑想・深呼吸・一人の時間を確保",
+  "再会": "旧友に連絡・過去の整理・リトライ",
+  "財成": "貯蓄・投資の見直し・副業検討",
+  "安定": "感謝を伝える・日常を楽しむ・掃除",
+  "陰影": "読書・内省・日記を書く",
+  "停止": "完全休養・デジタルデトックス",
+  "減退": "断捨離・手放す練習・無理しない",
+};
+
+// 星ごとのパワースポット属性
+const STAR_POWERSPOT = {
+  1: "山・岩場・古い神社・城跡",
+  2: "湖・鍾乳洞・白砂のビーチ・美術館",
+  3: "温泉・火山・南向きの丘・スタジアム",
+  4: "森・公園・植物園・渓谷",
+  5: "川・滝・港・水族館",
+  6: "海・天文台・図書館・紫陽花の名所",
+};
+
+function calcLucky(rokuse, hiun) {
+  const s = rokuse.star;
+  const cycle = hiun.cycle;
+  const isKasai = hiun.isDaiKasai || hiun.isChuKasai || hiun.isSmallKasai;
+
+  // ラッキーカラー: 星の基本色 + 日運アクセント
+  const baseColors = STAR_BASE_COLORS[s];
+  const accentColor = CYCLE_COLOR_ACCENT[cycle] || "";
+  const luckyColor = isKasai
+    ? baseColors[1] + "・" + accentColor
+    : baseColors[0] + "・" + accentColor;
+
+  // ラッキーナンバー: 星のベース + 日運インデックスから導出
+  const dayIdx = CYCLE_NAMES.indexOf(cycle);
+  const baseNums = STAR_BASE_NUMBERS[s];
+  const luckyNumber = ((baseNums[0] + dayIdx) % 9) + 1;
+  const luckyNumber2 = ((baseNums[1] + dayIdx) % 9) + 1;
+
+  // ラッキー方位
+  const mainDir = STAR_DIRECTION[s];
+  const subDir = CYCLE_DIRECTION_SUB[cycle] || "";
+
+  // ラッキーアイテム
+  const items = STAR_ITEMS[s];
+  const luckyItem = isKasai ? items.kasai : items.good;
+
+  // ラッキーフード
+  const foods = STAR_FOODS[s];
+  const luckyFood = isKasai ? foods.kasai : foods.good;
+
+  // 開運アクション
+  const luckyAction = CYCLE_ACTIONS[cycle] || "";
+
+  // パワースポット
+  const powerSpot = STAR_POWERSPOT[s];
+
+  return {
+    color: luckyColor,
+    number: luckyNumber !== luckyNumber2 ? luckyNumber + "・" + luckyNumber2 : String(luckyNumber),
+    direction: subDir !== mainDir ? mainDir + "・" + subDir : mainDir,
+    item: luckyItem,
+    food: luckyFood,
+    action: luckyAction,
+    powerSpot: powerSpot,
   };
 }
 
