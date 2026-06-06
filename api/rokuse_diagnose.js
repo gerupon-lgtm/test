@@ -716,26 +716,39 @@ function buildRangeData(rokuseA, birthA, baseDateStr, days, rokuseB, birthB) {
     };
 
     if (!rokuseB) {
-      // ソロ: 六星スコア（日運のみ）とバイオスコアを独立表示
+      // ソロ: 六星スコア(年運+月運+日運)とバイオスコアの平均
+      const dObj = new Date(ds + "T00:00:00Z");
+      const yr = dObj.getUTCFullYear(), mo = dObj.getUTCMonth() + 1;
+      const nenScore  = calcNenun(rokuseA, yr).score;
+      const tsukScore = calcTsukinun(rokuseA, yr, mo).score;
+      const rokuseScore = Math.min(100, Math.max(0, Math.round(nenScore * 0.30 + tsukScore * 0.30 + hiA.score * 0.40)));
       const phy  = Math.round(((bioA.physical    + 1) / 2) * 100);
       const emo  = Math.round(((bioA.emotional   + 1) / 2) * 100);
       const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
       const bioScore = Math.min(100, Math.max(0, Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3)));
-      // score = 六星日運スコアとバイオスコアの平均（テーブル表示用の総合指標）
-      entry.score = Math.min(100, Math.max(0, Math.round(hiA.score * 0.5 + bioScore * 0.5)));
+      // 総合スコア: 六星スコア50% + バイオスコア50%（「この日」タブと同一計算式）
+      entry.score = Math.min(100, Math.max(0, Math.round(rokuseScore * 0.5 + bioScore * 0.5)));
       entry.hiScore = hiA.score;
       entry.bioScore = bioScore;
+      entry.rokuseScore = rokuseScore;
     } else {
       const hiB  = calcHiun(rokuseB, ds);
       const bioB = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), d));
       const bioCompat = calcBioCompat(bioA, bioB);
       const rComp = calcRokuseCompat(rokuseA, rokuseB);
-      const avgHi = Math.round((hiA.score + hiB.score) / 2);
-      // ペア: 六星相性スコアとバイオ相性スコアの平均
-      const rokuseComp = Math.min(100, Math.max(0, Math.round(rComp.score * 0.4 + avgHi * 0.6)));
-      entry.score = Math.min(100, Math.max(0, Math.round(rokuseComp * 0.5 + bioCompat * 0.5)));
-      entry.hiScore = avgHi;
-      entry.bioScore = Math.round(bioCompat);
+      // 年運平均を加味（「この日」タブと同一計算式）
+      const dObj = new Date(ds + "T00:00:00Z");
+      const yr = dObj.getUTCFullYear();
+      const nenAvg = Math.round((calcNenun(rokuseA, yr).score + calcNenun(rokuseB, yr).score) / 2);
+      const hiAvg  = Math.round((hiA.score + hiB.score) / 2);
+      // 六星相性スコア: 六星相性40% + 年運平均30% + 日運平均30%
+      const rokuseScore = Math.min(100, Math.max(0, Math.round(rComp.score * 0.40 + nenAvg * 0.30 + hiAvg * 0.30)));
+      const bioScore = Math.min(100, Math.max(0, Math.round(bioCompat)));
+      // 総合スコア: 六星相性スコア50% + バイオ相性50%
+      entry.score = Math.min(100, Math.max(0, Math.round(rokuseScore * 0.5 + bioScore * 0.5)));
+      entry.hiScore = hiAvg;
+      entry.bioScore = bioScore;
+      entry.rokuseScore = rokuseScore;
       entry.cycleA = hiA.cycle;
       entry.cycleB = hiB.cycle;
       entry.isDaiKasaiB = hiB.isDaiKasai;
