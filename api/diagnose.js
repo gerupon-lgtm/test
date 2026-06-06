@@ -276,7 +276,14 @@ function calcLucky(meishiki) {
 
   const counts = meishiki.gogyoCount;
   const order = ["wood", "fire", "earth", "metal", "water"];
-  const weakElement = order.reduce((min, e) => counts[e] < counts[min] ? e : min, order[0]);
+  // weakElement: 最も少ない五行（同数なら日干以外を優先）
+  let weakElement = order.reduce((min, e) => {
+    if (counts[e] < counts[min]) return e;
+    if (counts[e] === counts[min] && min === dayElement && e !== dayElement) return e;
+    return min;
+  }, order[0]);
+  // 全て同数かつweakが日干と同じ場合、supportElementに変更
+  if (weakElement === dayElement) weakElement = supportElement;
 
   const jp = { wood:"木", fire:"火", earth:"土", metal:"金", water:"水" };
   const colors = {
@@ -315,6 +322,9 @@ function calcLucky(meishiki) {
   const colorList = uniq([...(colors[supportElement] || []), ...(colors[dayElement] || []), ...(colors[weakElement] || [])]);
   const numberList = uniq([...(numbers[dayElement] || []), ...(numbers[weakElement] || [])]).slice(0, 3);
 
+  // 方角の重複除去
+  const dirList = uniq([directions[weakElement], directions[dayElement]]);
+
   return {
     dayElement, dayElementJP: jp[dayElement],
     weakElement, weakElementJP: jp[weakElement],
@@ -323,7 +333,7 @@ function calcLucky(meishiki) {
     number: numberList.join("・"),
     item: items[weakElement] || items[dayElement],
     material: items[weakElement] || items[dayElement],
-    direction: directions[weakElement] + "・" + directions[dayElement],
+    direction: dirList.join("・"),
     food: foods[weakElement] || foods[dayElement],
     time: times[dayElement],
     day: days[dayElement],
