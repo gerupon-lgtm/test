@@ -707,24 +707,40 @@ function buildRangeData(rokuseA, birthA, baseDateStr, days, rokuseB, birthB) {
     const hiA = calcHiun(rokuseA, ds);
     const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), d));
 
-    const entry = { date: ds, cycle: hiA.cycle, isDaiKasai: hiA.isDaiKasai };
+    const entry = {
+      date: ds,
+      cycle: hiA.cycle,
+      isDaiKasai: hiA.isDaiKasai,
+      isChuKasai: hiA.isChuKasai,
+      isSmallKasai: hiA.isSmallKasai,
+    };
 
     if (!rokuseB) {
+      // ソロ: 六星スコア（日運のみ）とバイオスコアを独立表示
       const phy  = Math.round(((bioA.physical    + 1) / 2) * 100);
       const emo  = Math.round(((bioA.emotional   + 1) / 2) * 100);
       const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
-      const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
-      entry.score = Math.min(100, Math.max(0, Math.round(bioBase * 0.5 + hiA.score * 0.5)));
+      const bioScore = Math.min(100, Math.max(0, Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3)));
+      // score = 六星日運スコアとバイオスコアの平均（テーブル表示用の総合指標）
+      entry.score = Math.min(100, Math.max(0, Math.round(hiA.score * 0.5 + bioScore * 0.5)));
       entry.hiScore = hiA.score;
+      entry.bioScore = bioScore;
     } else {
       const hiB  = calcHiun(rokuseB, ds);
       const bioB = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), d));
       const bioCompat = calcBioCompat(bioA, bioB);
       const rComp = calcRokuseCompat(rokuseA, rokuseB);
-      const avgHi = (hiA.score + hiB.score) / 2;
-      entry.score = Math.min(100, Math.max(0, Math.round(bioCompat * 0.4 + rComp.score * 0.3 + avgHi * 0.3)));
+      const avgHi = Math.round((hiA.score + hiB.score) / 2);
+      // ペア: 六星相性スコアとバイオ相性スコアの平均
+      const rokuseComp = Math.min(100, Math.max(0, Math.round(rComp.score * 0.4 + avgHi * 0.6)));
+      entry.score = Math.min(100, Math.max(0, Math.round(rokuseComp * 0.5 + bioCompat * 0.5)));
+      entry.hiScore = avgHi;
+      entry.bioScore = Math.round(bioCompat);
       entry.cycleA = hiA.cycle;
       entry.cycleB = hiB.cycle;
+      entry.isDaiKasaiB = hiB.isDaiKasai;
+      entry.isChuKasaiB = hiB.isChuKasai;
+      entry.isSmallKasaiB = hiB.isSmallKasai;
     }
     result.push(entry);
   }
