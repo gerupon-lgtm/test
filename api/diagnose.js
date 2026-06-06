@@ -65,10 +65,13 @@ export default async function handler(req, res) {
       console.error("Range data error:", e);
     }
 
+    const luckyA = calcLucky(meishikiA);
+
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
       fiveScores,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
+      lucky: luckyA,
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
       weeklyData, monthlyData, bioGraph,
     });
@@ -138,10 +141,14 @@ export default async function handler(req, res) {
     console.error("Range data error:", e);
   }
 
+  const luckyA = calcLucky(meishikiA);
+  const luckyB = calcLucky(meishikiB);
+
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
     fortuneA, fortuneB, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
+    luckyA, luckyB,
     baseDiagnosis, dailyDiagnosis,
     diagnosis: baseDiagnosis + "\n\n" + dailyDiagnosis,
     usedModel: result.model, targetDate: judgeDateStr,
@@ -253,6 +260,74 @@ function buildMeishiki(dateStr, timeStr) {
     dayElementJP: JP[dayElement],
     gogyoCount,
     monthTsuhen,
+  };
+}
+
+
+// ================================================================
+//  ラッキー要素判定（日干・五行バランスから算出）
+// ================================================================
+function calcLucky(meishiki) {
+  if (!meishiki || !meishiki.dayElement || !meishiki.gogyoCount) return null;
+
+  const cycle = ["wood", "fire", "earth", "metal", "water"];
+  const dayElement = meishiki.dayElement;
+  const supportElement = cycle[(cycle.indexOf(dayElement) + 4) % 5]; // 日干を生む五行
+
+  const counts = meishiki.gogyoCount;
+  const order = ["wood", "fire", "earth", "metal", "water"];
+  const weakElement = order.reduce((min, e) => counts[e] < counts[min] ? e : min, order[0]);
+
+  const jp = { wood:"木", fire:"火", earth:"土", metal:"金", water:"水" };
+  const colors = {
+    wood:["緑"],
+    fire:["赤", "紫"],
+    earth:["黄", "ベージュ"],
+    metal:["白", "金色"],
+    water:["水色", "青"]
+  };
+  const numbers = { wood:["3", "8"], fire:["2", "7"], earth:["5", "0"], metal:["4", "9"], water:["1", "6"] };
+  const items = {
+    wood:"植物・木製品",
+    fire:"照明・赤い小物",
+    earth:"陶器・天然石",
+    metal:"金属小物・アクセサリー",
+    water:"飲み物・水晶"
+  };
+  const directions = { wood:"東", fire:"南", earth:"中央", metal:"西", water:"北" };
+  const foods = {
+    wood:"酸っぱいもの・緑の野菜",
+    fire:"苦いもの・赤い食材",
+    earth:"甘いもの・黄色い食材",
+    metal:"辛いもの",
+    water:"塩辛いもの・黒い食材"
+  };
+  const times = {
+    wood:"寅～卯の時間（3～7時）",
+    fire:"巳～午の時間（9～13時）",
+    earth:"丑・辰・未・戌の時間帯",
+    metal:"申～酉の時間（15～19時）",
+    water:"亥～子の時間（21～1時）"
+  };
+  const days = { wood:"木曜・水曜", fire:"火曜", earth:"土曜", metal:"金曜・月曜", water:"水曜" };
+
+  const uniq = arr => [...new Set(arr.filter(Boolean))];
+  const colorList = uniq([...(colors[supportElement] || []), ...(colors[dayElement] || []), ...(colors[weakElement] || [])]);
+  const numberList = uniq([...(numbers[dayElement] || []), ...(numbers[weakElement] || [])]).slice(0, 3);
+
+  return {
+    dayElement, dayElementJP: jp[dayElement],
+    weakElement, weakElementJP: jp[weakElement],
+    supportElement, supportElementJP: jp[supportElement],
+    color: colorList.join("・"),
+    number: numberList.join("・"),
+    item: items[weakElement] || items[dayElement],
+    material: items[weakElement] || items[dayElement],
+    direction: directions[weakElement] + "・" + directions[dayElement],
+    food: foods[weakElement] || foods[dayElement],
+    time: times[dayElement],
+    day: days[dayElement],
+    note: "日干の" + jp[dayElement] + "を活かし、不足しがちな" + jp[weakElement] + "を補う要素です。"
   };
 }
 
