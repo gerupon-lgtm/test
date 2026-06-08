@@ -24,13 +24,13 @@ export default async function handler(req, res) {
     const now = new Date();
     judgeDateStr = now.toLocaleDateString("en-CA", { timeZone: tz }); // YYYY-MM-DD形式
   }
-  const judgeDate = new Date(judgeDateStr + "T12:00:00Z");
+  const judgeDate = new Date(judgeDateStr + "T00:00:00Z");
   const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: tz });
   const isToday = judgeDateStr === todayStr;
 
   // ========== 一人目の計算 ==========
   const meishikiA = buildMeishiki(birthA, timeA);
-  const bioA = calcBiorhythm(diffDays(new Date(birthA + "T12:00:00Z"), judgeDate));
+  const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), judgeDate));
   const dayPillar = calcDayPillar(judgeDateStr);
   const fortuneA = calcDailyFortune(meishikiA, dayPillar);
 
@@ -79,7 +79,7 @@ export default async function handler(req, res) {
 
   // ========== 相性診断 ==========
   const meishikiB = buildMeishiki(birthB, timeB);
-  const bioB = calcBiorhythm(diffDays(new Date(birthB + "T12:00:00Z"), judgeDate));
+  const bioB = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), judgeDate));
   const fortuneB = calcDailyFortune(meishikiB, dayPillar);
 
   const phy = Math.round((1 - Math.abs(bioA.physical - bioB.physical) / 2) * 100);
@@ -189,7 +189,7 @@ const JUNIUN_TABLE = [
 const SETSUIRI = [0,6,4,6,5,6,7,7,8,8,8,7,7]; // 月1-12の節入り日（index0はダミー）
 
 function buildMeishiki(dateStr, timeStr) {
-  const d = new Date(dateStr + "T12:00:00Z");
+  const d = new Date(dateStr + "T00:00:00Z");
   const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
 
   // 年柱（立春=2/4前後で切り替え）
@@ -564,7 +564,7 @@ async function callGemini(apiKey, prompt) {
 // ================================================================
 
 function calcDayPillar(dateStr) {
-  const d = new Date(dateStr + "T12:00:00Z");
+  const d = new Date(dateStr + "T00:00:00Z");
   const baseMs = Date.UTC(1900, 0, 1);
   const daysDiff = Math.floor((d.getTime() - baseMs) / 86400000);
   const offset = 10;
@@ -696,9 +696,9 @@ function sanitizeDateWords(text, dateStr) {
 // ================================================================
 function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, birthB) {
   const result = [];
-  const baseMs = new Date(baseDateStr + "T12:00:00Z").getTime();
-  const birthAMs = new Date(birthA + "T12:00:00Z").getTime();
-  const birthBMs = birthB ? new Date(birthB + "T12:00:00Z").getTime() : 0;
+  const baseMs = new Date(baseDateStr + "T00:00:00Z").getTime();
+  const birthAMs = new Date(birthA + "T00:00:00Z").getTime();
+  const birthBMs = birthB ? new Date(birthB + "T00:00:00Z").getTime() : 0;
   for (let i = 0; i < days; i++) {
     const dMs = baseMs + i * 86400000;
     const d = new Date(dMs);
@@ -740,9 +740,9 @@ function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, b
 //  バイオリズムグラフデータ（前後15日 = 30日分）
 // ================================================================
 function buildBioGraphData(birthA, baseDateStr, span, birthB) {
-  const baseMs = new Date(baseDateStr + "T12:00:00Z").getTime();
-  const birthAMs = new Date(birthA + "T12:00:00Z").getTime();
-  const birthBMs = birthB ? new Date(birthB + "T12:00:00Z").getTime() : 0;
+  const baseMs = new Date(baseDateStr + "T00:00:00Z").getTime();
+  const birthAMs = new Date(birthA + "T00:00:00Z").getTime();
+  const birthBMs = birthB ? new Date(birthB + "T00:00:00Z").getTime() : 0;
   const half = Math.floor(span / 2);
   const result = { labels: [], a: { physical: [], emotional: [], intellectual: [] } };
   if (birthB) result.b = { physical: [], emotional: [], intellectual: [] };
