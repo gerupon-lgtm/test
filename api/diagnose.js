@@ -189,6 +189,35 @@ const JUNIUN_TABLE = [
 // 節入り日テーブル（簡易版：各月のおおよその節入り日）
 const SETSUIRI = [0,6,4,6,5,6,7,7,8,8,8,7,7]; // 月1-12の節入り日（index0はダミー）
 
+// 月律分野蔵干テーブル（地支 → [[天干, 日数], ...] 余気→中気→本気の順）
+// 節入りからの経過日数で作用する蔵干（月支の分野蔵干）を決定する
+const ZOUKAN_TABLE = {
+  "子": [["壬",10],["癸",20]],
+  "丑": [["癸",9],["辛",3],["己",18]],
+  "寅": [["戊",7],["丙",7],["甲",16]],
+  "卯": [["甲",10],["乙",20]],
+  "辰": [["乙",9],["癸",3],["戊",18]],
+  "巳": [["戊",5],["庚",9],["丙",16]],
+  "午": [["丙",10],["己",9],["丁",11]],
+  "未": [["丁",9],["乙",3],["己",18]],
+  "申": [["戊",7],["壬",7],["庚",16]],
+  "酉": [["庚",10],["辛",20]],
+  "戌": [["辛",9],["丁",3],["戊",18]],
+  "亥": [["戊",7],["甲",5],["壬",18]],
+};
+
+// 経過日数から月支の分野蔵干を引く（節入りからの日数）
+function pickMonthZoukan(branch, daysFromSetsuiri) {
+  const table = ZOUKAN_TABLE[branch];
+  if (!table) return null;
+  let acc = 0;
+  for (const [stem, dur] of table) {
+    acc += dur;
+    if (daysFromSetsuiri < acc) return stem;
+  }
+  return table[table.length - 1][0]; // 範囲を超えたら本気
+}
+
 function buildMeishiki(dateStr, timeStr) {
   const d = new Date(dateStr + "T00:00:00Z");
   const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
@@ -201,14 +230,34 @@ function buildMeishiki(dateStr, timeStr) {
   const yearBranch = yearIdx % 12;
 
   // 月柱（節入り日で切り替え）
-  let monthForPillar = m;
+  // 節入り前ならその月の節がまだ来ていないので前月扱い。
+  // 節切りの月支: 立春(2月節)=寅、以降 卯…丑 と続く。暦月mの節後の月支idxは m%12
+  //   （2月→寅=2, 3月→卯=3, … 12月→子=0, 1月→丑=1）
+  let solarMonth = m;
   const setsuiri = SETSUIRI[m] || 6;
-  if (day < setsuiri) monthForPillar--;
-  if (monthForPillar <= 0) { monthForPillar += 12; yearForPillar--; }
-  const monthBranch = ((monthForPillar + 1) % 12);
-  const monthBranchIdx = (monthForPillar + 1) % 12;
-  const monthStemBase = (yearStem % 5) * 2;
-  const monthStem = (monthStemBase + monthBranchIdx) % 10;
+  if (day < setsuiri) solarMonth--;
+  if (solarMonth <= 0) solarMonth += 12;
+  const monthBranchIdx = solarMonth % 12;
+  const monthBranch = monthBranchIdx;
+  // 月干（五虎遁）: 年干group=yearStem%5。寅月の月干先頭を group*2+2 とし、寅からの経過月を加算。
+  //   甲己→丙寅, 乙庚→戊寅, 丙辛→庚寅, 丁壬→壬寅, 戊癸→甲寅
+  const monthsFromTiger = (monthBranchIdx - 2 + 12) % 12;
+  const monthStem = ((yearStem % 5) * 2 + 2 + monthsFromTiger) % 10;
+
+  // 月支の分野蔵干（節入りからの経過日数で決定）
+  // 節入り前で前月扱いになった場合は、前月の節入りからの経過日数を用いる
+  let daysFromSetsuiri;
+  if (day >= setsuiri) {
+    daysFromSetsuiri = day - setsuiri;
+  } else {
+    // 前月の節入り日から今月の日までの経過日数
+    const prevM = m === 1 ? 12 : m - 1;
+    const prevSetsuiri = SETSUIRI[prevM] || 6;
+    const prevMonthDays = new Date(Date.UTC(m === 1 ? y - 1 : y, prevM, 0)).getUTCDate();
+    daysFromSetsuiri = (prevMonthDays - prevSetsuiri) + day;
+  }
+  const monthZoukanStem = pickMonthZoukan(BRANCHES[monthBranchIdx], daysFromSetsuiri);
+  const monthZoukanIdx = monthZoukanStem !== null ? STEMS.indexOf(monthZoukanStem) : null;
 
   // 日柱（UTC基準で日数計算）
   const baseMs = Date.UTC(1900, 0, 1);
@@ -231,6 +280,8 @@ function buildMeishiki(dateStr, timeStr) {
   const yearTsuhen = getTsuhen(dayStem, yearStem);
   const monthTsuhen = getTsuhen(dayStem, monthStem);
   const timeTsuhen = timeStem !== null ? getTsuhen(dayStem, timeStem) : null;
+  // 月支蔵干の通変星（日干と蔵干の関係）
+  const monthZoukanTsuhen = monthZoukanIdx !== null ? getTsuhen(dayStem, monthZoukanIdx) : null;
 
   // 十二運（日干と各柱の地支の関係）
   const yearJuniun = JUNIUNN[JUNIUN_TABLE[dayStem][yearBranch]];
@@ -249,18 +300,23 @@ function buildMeishiki(dateStr, timeStr) {
   // 地支の五行も加算
   const BRANCH_ELEMENT = ["water","earth","wood","wood","earth","fire","fire","earth","metal","metal","earth","water"];
   branches.forEach(b => gogyoCount[BRANCH_ELEMENT[b]]++);
+  // 月令（月支の分野蔵干）の五行を加算：命式で最も強く作用するため反映する
+  if (monthZoukanStem !== null) gogyoCount[STEM_ELEMENT[monthZoukanStem]]++;
 
   const dayElement = STEM_ELEMENT[STEMS[dayStem]];
 
   return {
     year: { stem: STEMS[yearStem], branch: BRANCHES[yearBranch], tsuhen: yearTsuhen, juniun: yearJuniun },
-    month: { stem: STEMS[monthStem], branch: BRANCHES[monthBranchIdx], tsuhen: monthTsuhen, juniun: monthJuniun },
+    month: { stem: STEMS[monthStem], branch: BRANCHES[monthBranchIdx], tsuhen: monthTsuhen, juniun: monthJuniun,
+             zoukan: monthZoukanStem, zoukanTsuhen: monthZoukanTsuhen },
     day: { stem: STEMS[dayStem], branch: BRANCHES[dayBranch], juniun: dayJuniun },
     time: timeStem !== null ? { stem: STEMS[timeStem], branch: BRANCHES[timeBranch], tsuhen: timeTsuhen, juniun: timeJuniun } : null,
     dayElement,
     dayElementJP: JP[dayElement],
     gogyoCount,
     monthTsuhen,
+    monthZoukan: monthZoukanStem,
+    monthZoukanTsuhen,
   };
 }
 
@@ -389,7 +445,7 @@ function formatMeishiki(m, name) {
   let s = `【${name}の命式】\n`;
   s += `日干: ${m.day.stem}（${m.dayElementJP}）\n`;
   s += `年柱: ${m.year.stem}${m.year.branch}（通変星:${m.year.tsuhen}、十二運:${m.year.juniun}）\n`;
-  s += `月柱: ${m.month.stem}${m.month.branch}（通変星:${m.month.tsuhen}、十二運:${m.month.juniun}）\n`;
+  s += `月柱: ${m.month.stem}${m.month.branch}（通変星:${m.month.tsuhen}、十二運:${m.month.juniun}${m.month.zoukan ? `、蔵干:${m.month.zoukan}（${m.month.zoukanTsuhen}）` : ""}）\n`;
   s += `日柱: ${m.day.stem}${m.day.branch}（十二運:${m.day.juniun}）\n`;
   if (m.time) s += `時柱: ${m.time.stem}${m.time.branch}（通変星:${m.time.tsuhen}、十二運:${m.time.juniun}）\n`;
   s += `五行バランス: 木${m.gogyoCount.wood} 火${m.gogyoCount.fire} 土${m.gogyoCount.earth} 金${m.gogyoCount.metal} 水${m.gogyoCount.water}\n`;
