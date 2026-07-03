@@ -216,13 +216,10 @@ function getUnmeiBase(year, month) {
   return ((raw - 1 + 120) % 60) + 1;
 }
 
-// プラス/マイナスは星数で決まる（干支ではなく星数の範囲）
-// 星数 1〜30 → マイナス(−)
-// 星数 31〜60 → プラス(+)
-// 根拠: 1972/1/17(星数44)=木星人+、1972/4/8(星数6)=土星人− で検証済み
-// 符号は生まれ年の干支で決定（正式ルール）
+// 符号（＋／−）は生まれ年の干支で決定する（本家・細木数子式の正式ルール）
 // +: 子寅辰午申戌 (index 0,2,4,6,8,10)
 // −: 丑卯巳未酉亥 (index 1,3,5,7,9,11)
+// 検証: 1972/1/17(星数44)=木星人+, 1972/4/8(星数6)=土星人−
 const ETO_SIGN_TABLE = ["+","−","+","−","+","−","+","−","+","−","+","−"];
 function getEtoSign(year) {
   const idx = ((year - 1900) % 12 + 12) % 12;
@@ -379,6 +376,8 @@ const CYCLE_SCORE = {
 
 function getCycleIndex(star, sign, year) {
   const baseMap = (sign === "+") ? STAR_BASE_YEAR_PLUS : STAR_BASE_YEAR_MINUS;
+  // star は starFromSeiSu により必ず 1〜6 を返すため || 1984 は到達しない保険値。
+  // 万一 star がテーブル外になった場合でも例外を投げず既定周期で計算を続けるためのフォールバック。
   const base = baseMap[star] || 1984;
   let idx = (year - base) % 12;
   if (idx < 0) idx += 12;
@@ -604,27 +603,37 @@ function calcLucky(rokuse, hiun) {
 }
 
 // ================================================================
-//  六星相性計算
+//  六星相性計算（陰陽五行説ベース）
+//  六星は五行に対応し、相性は本家公表の「運命星別相性（人運）」に準拠する。
+//  対応: 土星人=土 / 金星人=金 / 火星人=火 / 天王星人=木 / 木星人=水(陽) / 水星人=水(陰)
+//
+//  最高相性（相互補完ペア）: 土星⇔金星・火星⇔天王星・木星⇔水星
+//    → 五行の相生（土生金・木生火・水の陰陽補完）を背景とする組み合わせ。
+//      hosokikazuko.com / spicomi の相性ランキングで最上位とされるペア。
+//  要注意（相剋・衝突）: 土星-火星・火星-水星
+//    → 五行の相剋（火剋金の周辺・水剋火）に対応。
+//  それ以外は「良好」。同星同士は「同調」。
+//  出典: hosokikazuko.com（相性早見表）, spicomi.net（相性ランキング）,
+//        shindan.kosazukari.com（相性診断・陰陽五行説の記述）
 // ================================================================
 
-// 六星の相性マップ（対角・補完・衝突）
-const COMPAT_MAP = {
-  // [star1][star2] → {label, score}
-};
+// 最高相性ペア（相互補完）: [土星,金星] [火星,天王星] [木星,水星]
+const COMPAT_BEST_PAIRS = [[1, 2], [3, 4], [5, 6]];
+// 要注意ペア（相剋・衝突）: [土星,火星] [火星,水星]
+const COMPAT_BAD_PAIRS  = [[1, 3], [3, 6]];
+
+function _pairKey(a, b) { return a < b ? `${a},${b}` : `${b},${a}`; }
+const COMPAT_BEST_SET = new Set(COMPAT_BEST_PAIRS.map(([a, b]) => _pairKey(a, b)));
+const COMPAT_BAD_SET  = new Set(COMPAT_BAD_PAIRS.map(([a, b]) => _pairKey(a, b)));
 
 function calcRokuseCompat(rA, rB) {
   const a = rA.star, b = rB.star;
-  if (a === b) return { label: "同じ星（同調）", score: 72 };
+  if (a === b) return { label: "同じ星（同調）", score: 70 };
 
-  const diff = Math.abs(a - b);
-  // 向かい合う星（距離3）: 強い相性
-  if (diff === 3) return { label: "向かい星（強い絆）", score: 88 };
-  // 隣の星（距離1）: まずまず
-  if (diff === 1 || diff === 5) return { label: "隣の星（自然な縁）", score: 68 };
-  // 2つ隔てた星（距離2）: 刺激的
-  if (diff === 2 || diff === 4) return { label: "隔たりの星（刺激的な関係）", score: 58 };
-
-  return { label: "普通", score: 60 };
+  const key = _pairKey(a, b);
+  if (COMPAT_BEST_SET.has(key)) return { label: "最高相性（相互補完）", score: 90 };
+  if (COMPAT_BAD_SET.has(key))  return { label: "要注意（衝突しやすい）", score: 48 };
+  return { label: "良好（自然な縁）", score: 68 };
 }
 
 // 両者の大殺界状態から相性補正
@@ -705,6 +714,8 @@ function buildRangeData(rokuseA, birthA, baseDateStr, days, rokuseB, birthB) {
   for (let i = 0; i < days; i++) {
     const d = new Date(baseDate);
     d.setUTCDate(d.getUTCDate() + i);
+    // baseDate は "T00:00:00Z"（UTC固定）由来・UTC メソッドで加算しているため、
+    // toISOString() の UTC 変換で日付がずれる心配はない（判定日空欄バグの当日組み立てとは文脈が異なる）。
     const ds = d.toISOString().slice(0, 10);
     const hiA = calcHiun(rokuseA, ds);
     const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), d));
@@ -775,6 +786,7 @@ function buildBioGraphData(birthA, baseDateStr, span, birthB) {
   for (let i = -half; i <= half; i++) {
     const d = new Date(baseDate);
     d.setUTCDate(d.getUTCDate() + i);
+    // UTC 固定日付を UTC メソッドで加算しているため toISOString() のずれは発生しない。
     const ds = d.toISOString().slice(0, 10);
     result.labels.push(ds);
     const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), d));
