@@ -49,8 +49,14 @@ export default async function handler(req, res) {
     Math.round(nenunA.score * 0.30 + tsukinA.score * 0.30 + hiUnA.score * 0.40)
   ));
 
+  // AI診断コメント生成: ollama（自宅）→ OpenRouter → Gemini の順にフォールバック。
+  // いずれかのプロバイダの接続情報が設定されていればよい（全て未設定の場合のみエラー）。
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY未設定" });
+  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+  const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL;
+  if (!OLLAMA_BASE_URL && !OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+    return res.status(500).json({ error: "AI診断のプロバイダが未設定です（OLLAMA_BASE_URL / OPENROUTER_API_KEY / GEMINI_API_KEY のいずれかが必要）" });
+  }
 
   if (isSolo) {
     const prompt = buildSoloPrompt({
@@ -60,7 +66,7 @@ export default async function handler(req, res) {
       physical: phy, emotional: emo, intellectual: int_,
       rokuseScore: rokuseScoreA, bioScore: bioScoreA, judgeDateStr, isToday,
     });
-    const result = await callGemini(GEMINI_API_KEY, prompt);
+    const result = await generateDiagnosisText(prompt, { OLLAMA_BASE_URL, OPENROUTER_API_KEY, GEMINI_API_KEY });
     if (result.error) return res.status(502).json({ error: result.error });
     const diagText = sanitizeDateWords(result.text, judgeDateStr);
 
@@ -121,11 +127,11 @@ export default async function handler(req, res) {
   });
 
   // 基本相性とこの日の運気を順番に生成（レート制限回避のため直列）
-  const result1 = await callGemini(GEMINI_API_KEY, prompts.prompt1);
+  const result1 = await generateDiagnosisText(prompts.prompt1, { OLLAMA_BASE_URL, OPENROUTER_API_KEY, GEMINI_API_KEY });
   if (result1.error) return res.status(502).json({ error: result1.error });
   // 連続呼び出しによるレート制限を避けるため少し待機
   await new Promise(r => setTimeout(r, 500));
-  const result2 = await callGemini(GEMINI_API_KEY, prompts.prompt2);
+  const result2 = await generateDiagnosisText(prompts.prompt2, { OLLAMA_BASE_URL, OPENROUTER_API_KEY, GEMINI_API_KEY });
   if (result2.error) return res.status(502).json({ error: result2.error });
 
   const baseDiagnosis  = sanitizeDateWords(result1.text, judgeDateStr);
@@ -831,7 +837,128 @@ function sanitizeDateWords(text, dateStr) {
 }
 
 // ================================================================
-//  Gemini API 呼び出し
+//  AI診断コメント生成: プロバイダ・フォールバック統括
+//  優先順位: ①ollama（自宅・OLLAMA_BASE_URL） → ②OpenRouter → ③Gemini
+//  各プロバイダは { text, model } または { error } を返す既存の契約を維持。
+//  未設定のプロバイダはスキップし、次の候補へフォールバックする。
+//  返却テキストの後処理（マークダウン除去・文末補完等）は各プロバイダ関数内で行う。
+// ================================================================
+
+async function generateDiagnosisText(prompt, { OLLAMA_BASE_URL, OPENROUTER_API_KEY, GEMINI_API_KEY }) {
+  const errors = [];
+
+  if (OLLAMA_BASE_URL) {
+    const r = await callOllama(OLLAMA_BASE_URL, prompt);
+    if (!r.error) return r;
+    errors.push(r.error);
+    console.error("ollama失敗、OpenRouterへフォールバック:", r.error);
+  }
+
+  if (OPENROUTER_API_KEY) {
+    const r = await callOpenRouter(OPENROUTER_API_KEY, prompt);
+    if (!r.error) return r;
+    errors.push(r.error);
+    console.error("OpenRouter失敗、Geminiへフォールバック:", r.error);
+  }
+
+  if (GEMINI_API_KEY) {
+    const r = await callGemini(GEMINI_API_KEY, prompt);
+    if (!r.error) return r;
+    errors.push(r.error);
+  }
+
+  return { error: `AI診断コメントの生成に失敗しました: ${errors.join(" / ") || "利用可能なプロバイダがありません"}` };
+}
+
+// 診断文の共通後処理（マークダウン除去・文末補完）。各プロバイダ関数から呼び出す。
+function finalizeDiagnosisText(text) {
+  text = (text || "").replace(/^#{1,4}\s*/gm, "").replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1").replace(/^[-*]\s+/gm, "").trim();
+  if (text && !text.match(/[。！？]$/)) {
+    const lastPeriod = text.lastIndexOf("。");
+    if (lastPeriod > text.length * 0.6) {
+      text = text.substring(0, lastPeriod + 1);
+    } else {
+      text = text.replace(/[、，,\s]+$/, "") + "。";
+    }
+  }
+  return text;
+}
+
+// ================================================================
+//  ollama（自宅サーバー）呼び出し
+//  OLLAMA_BASE_URL 経由（例: Cloudflare Tunnel / Tailscale Funnel の固定URL）
+//  モデル名は OLLAMA_MODEL で指定（既定値あり）。/api/generate エンドポイント使用。
+// ================================================================
+
+async function callOllama(baseUrl, prompt) {
+  const model = process.env.OLLAMA_MODEL || "llama3.1:8b";
+  const timeoutMs = Number(process.env.OLLAMA_TIMEOUT_MS || 20000);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const url = `${baseUrl.replace(/\/$/, "")}/api/generate`;
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        prompt,
+        stream: false,
+        options: { temperature: 0.7 },
+      }),
+    });
+    clearTimeout(timer);
+    if (!r.ok) return { error: `ollama ${r.status} (${model})` };
+    const d = await r.json();
+    const text = finalizeDiagnosisText(d?.response || "");
+    if (!text) return { error: `ollama応答が空 (${model})` };
+    return { text, model: `ollama:${model}` };
+  } catch (e) {
+    return { error: `ollama接続エラー (${model}): ${e.message}` };
+  }
+}
+
+// ================================================================
+//  OpenRouter 呼び出し
+//  OPENROUTER_API_KEY 経由。モデル名は OPENROUTER_MODEL で指定（既定値あり）。
+//  複数モデルをカンマ区切りで指定すると順にフォールバックする。
+// ================================================================
+
+async function callOpenRouter(apiKey, prompt) {
+  const modelsEnv = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.1-70b-instruct";
+  const MODELS = modelsEnv.split(",").map(s => s.trim()).filter(Boolean);
+  let lastError = null;
+
+  for (const model of MODELS) {
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+          max_tokens: 3072,
+        }),
+      });
+      if (!r.ok) { lastError = `OpenRouter ${r.status} (${model})`; continue; }
+      const d = await r.json();
+      const text = finalizeDiagnosisText(d?.choices?.[0]?.message?.content || "");
+      if (!text) { lastError = `OpenRouter応答が空 (${model})`; continue; }
+      return { text, model: `openrouter:${model}` };
+    } catch (e) {
+      lastError = `OpenRouter接続エラー (${model}): ${e.message}`;
+    }
+  }
+  return { error: lastError || "OpenRouter: 利用可能なモデルがありません" };
+}
+
+// ================================================================
+//  Gemini API 呼び出し（第3フォールバック）
 // ================================================================
 
 async function callGemini(apiKey, prompt) {
