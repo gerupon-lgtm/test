@@ -35,8 +35,7 @@ export default async function handler(req, res) {
   const dayPillar = calcDayPillar(judgeDateStr);
   const fortuneA = calcDailyFortune(meishikiA, dayPillar);
 
-  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  if (!GEMINI_API_KEY) return res.status(500).json({ error: "GEMINI_API_KEY未設定" });
+  // AI診断コメント生成: 自宅Ollama（メイン）→ OpenRouter（フォールバック）
 
   if (isSolo) {
     const phy = Math.round(((bioA.physical + 1) / 2) * 100);
@@ -53,7 +52,7 @@ export default async function handler(req, res) {
       fortune: fortuneA, dayPillar, isToday, fiveScores,
       physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
     });
-    const result = await callGemini(GEMINI_API_KEY, prompt);
+    const result = await callAI(prompt);
     if (result.error) return res.status(502).json({ error: result.error });
     const diagText = sanitizeDateWords(result.text, judgeDateStr);
 
@@ -111,7 +110,7 @@ export default async function handler(req, res) {
     fortuneA, fortuneB, dayPillar, isToday,
     physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
   });
-  const result = await callGemini(GEMINI_API_KEY, prompt);
+  const result = await callAI(prompt);
   if (result.error) return res.status(502).json({ error: result.error });
   let diagText = sanitizeDateWords(result.text, judgeDateStr);
 
@@ -538,82 +537,156 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 // ================================================================
 //  Gemini API
 // ================================================================
-async function callGemini(apiKey, prompt) {
-  // Flash優先、429ならFlash-Liteにフォールバック
-  const MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-  ];
-  const MAX_RETRIES = 1; // 各モデルにつき1回リトライ
+// ================================================================
+//  AI診断コメント生成: 自宅Ollama（メイン）→ OpenRouter（フォールバック）
+//  OpenAI互換のchat completions形式で統一（Ollama/OpenRouterとも対応）
+// ================================================================
+
+// 必要な環境変数:
+//   OLLAMA_BASE_URL   自宅Ollamaを外部公開したURL（例: Cloudflare Tunnel等）
+//                      https://xxxx.example.com のようにhttp(s)込みで設定。末尾スラッシュ不要
+//   OLLAMA_MODEL       自宅Ollamaで使うモデル名（未設定時 "llama3.1"）
+//   OLLAMA_TIMEOUT_MS  自宅Ollamaの応答待ちタイムアウト（未設定時 8000ms。自宅サーバー停止時に長時間待たないため）
+//   OPENROUTER_API_KEY OpenRouterのAPIキー（第2段フォールバック用）
+//   OPENROUTER_MODEL   OpenRouterで使うモデル名（未設定時 "meta-llama/llama-3.1-8b-instruct:free"）
+//   GEMINI_API_KEY     Google AI StudioのAPIキー（第3段フォールバック用）
+//   GEMINI_MODEL       Geminiで使うモデル名（未設定時 "gemini-2.5-flash"）
+
+async function callAI(prompt) {
+  const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL;
+  const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.1";
+  const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 8000;
+  const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
+  const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.1-8b-instruct:free";
+  const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+  const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
   let lastError = null;
-  let usedModel = "";
 
-  for (const model of MODELS) {
-    let got429 = false;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-        const r = await fetch(url, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.7, maxOutputTokens: 3072 },
-          }),
-        });
-        if (r.ok) {
-          const d = await r.json();
-          const candidate = d?.candidates?.[0];
-          let text = candidate?.content?.parts?.[0]?.text || "";
-          const finishReason = candidate?.finishReason || "";
-
-          // マークダウン記号の除去
-          text = text.replace(/^#{1,4}\s*/gm, "").replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1").replace(/^[-*]\s+/gm, "").trim();
-
-          // MAX_TOKENSで途切れた場合：1回だけリトライ（短縮プロンプトで再試行）
-          if (finishReason === "MAX_TOKENS" && attempt === 0) {
-            console.log(`Text truncated (${model}), retrying with shorter instruction...`);
-            // 文字数指示を短縮してリトライ
-            prompt = prompt
-              .replace(/500〜800字/g, "400〜600字")
-              .replace(/600〜900字/g, "450〜700字");
-            continue;
-          }
-
-          // それでも途切れた場合：文末を自然に補完
-          if (text && !text.match(/[。！？]$/)) {
-            // 最後の句点までを採用
-            const lastPeriod = text.lastIndexOf("。");
-            if (lastPeriod > text.length * 0.6) {
-              // 60%以上書けていれば、最後の句点で切る
-              text = text.substring(0, lastPeriod + 1);
-            } else {
-              // あまりに短い場合はそのまま句点を付加
-              text = text.replace(/[、，,\s]+$/, "") + "。";
-            }
-          }
-
-          usedModel = model;
-          return { text: text || "診断文の生成に失敗しました。", model: usedModel };
-        }
-        if (r.status === 429) {
-          got429 = true;
-          if (attempt < MAX_RETRIES) {
-            await new Promise(r => setTimeout(r, 2000));
-            continue;
-          }
-          lastError = `429 (${model})`;
-          break;
-        }
-        lastError = `${r.status} (${model})`;
-        break;
-      } catch (e) { lastError = e.message; break; }
-    }
-    if (got429) continue; // 429なら次モデルへ
-    if (usedModel) break; // 成功済みなら終了
-    // 429以外のエラーでも次モデルを試す
+  // 1) 自宅Ollama（メイン）
+  if (OLLAMA_BASE_URL) {
+    const r = await callOpenAICompatible({
+      url: `${OLLAMA_BASE_URL.replace(/\/$/, "")}/v1/chat/completions`,
+      headers: { "Content-Type": "application/json" },
+      model: OLLAMA_MODEL,
+      prompt,
+      timeoutMs: OLLAMA_TIMEOUT_MS,
+      providerLabel: "ollama",
+      retryOn429: false, // 自宅サーバーにレート制限は通常無いため429リトライは行わない
+    });
+    if (r.text !== undefined) return r;
+    lastError = r.error;
   }
-  if (usedModel) return { text: "", model: usedModel }; // ここには来ないはず
+
+  // 2) OpenRouter（第2段フォールバック）
+  if (OPENROUTER_API_KEY) {
+    const r = await callOpenAICompatible({
+      url: "https://openrouter.ai/api/v1/chat/completions",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+      },
+      model: OPENROUTER_MODEL,
+      prompt,
+      timeoutMs: 15000,
+      providerLabel: "openrouter",
+      retryOn429: true,
+    });
+    if (r.text !== undefined) return r;
+    lastError = r.error;
+  }
+
+  // 3) Gemini（第3段フォールバック。OpenAI互換エンドポイントを使用）
+  if (GEMINI_API_KEY) {
+    const r = await callOpenAICompatible({
+      url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${GEMINI_API_KEY}`,
+      },
+      model: GEMINI_MODEL,
+      prompt,
+      timeoutMs: 15000,
+      providerLabel: "gemini",
+      retryOn429: true,
+    });
+    if (r.text !== undefined) return r;
+    lastError = r.error;
+  }
+
+  if (!OLLAMA_BASE_URL && !OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+    return { error: "AI API未設定: OLLAMA_BASE_URL・OPENROUTER_API_KEY・GEMINI_API_KEYのいずれかを設定してください。" };
+  }
   return { error: `AI APIエラー: ${lastError}。数分後に再試行してください。` };
+}
+
+// OpenAI互換chat completions呼び出し（Ollama/OpenRouter共通処理）
+// テキスト後処理（マークダウン除去・MAX_TOKENS時の短縮リトライ・文末補完）はGemini版から変更なし
+async function callOpenAICompatible({ url, headers, model, prompt, timeoutMs, providerLabel, retryOn429 }) {
+  const MAX_RETRIES = 1; // 429・タイムアウト時に1回リトライ（Gemini版と同数）
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const r = await fetch(url, {
+        method: "POST",
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+          max_tokens: 3072,
+        }),
+      });
+      clearTimeout(timer);
+
+      if (r.ok) {
+        const d = await r.json();
+        const choice = d?.choices?.[0];
+        let text = choice?.message?.content || "";
+        const finishReason = choice?.finish_reason || "";
+
+        // マークダウン記号の除去
+        text = text.replace(/^#{1,4}\s*/gm, "").replace(/\*{1,2}([^*]+)\*{1,2}/g, "$1").replace(/^[-*]\s+/gm, "").trim();
+
+        // 出力上限で途切れた場合：1回だけリトライ（短縮プロンプトで再試行）
+        if (finishReason === "length" && attempt === 0) {
+          console.log(`Text truncated (${providerLabel}:${model}), retrying with shorter instruction...`);
+          prompt = prompt
+            .replace(/500〜800字/g, "400〜600字")
+            .replace(/600〜900字/g, "450〜700字");
+          continue;
+        }
+
+        // それでも途切れた場合：文末を自然に補完
+        if (text && !text.match(/[。！？]$/)) {
+          const lastPeriod = text.lastIndexOf("。");
+          if (lastPeriod > text.length * 0.6) {
+            text = text.substring(0, lastPeriod + 1);
+          } else {
+            text = text.replace(/[、，,\s]+$/, "") + "。";
+          }
+        }
+
+        return { text: text || "診断文の生成に失敗しました。", model: `${providerLabel}:${model}` };
+      }
+
+      if (r.status === 429 && retryOn429 && attempt < MAX_RETRIES) {
+        await new Promise(res => setTimeout(res, 2000));
+        continue;
+      }
+      lastError = `${r.status} (${providerLabel}:${model})`;
+      break;
+    } catch (e) {
+      clearTimeout(timer);
+      lastError = e.name === "AbortError" ? `timeout (${providerLabel}:${model})` : `${e.message} (${providerLabel}:${model})`;
+      break;
+    }
+  }
+  return { error: lastError };
 }
 
 // ================================================================
