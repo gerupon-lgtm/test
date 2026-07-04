@@ -2,10 +2,10 @@
   "version": 2,
   "functions": {
     "api/diagnose.js": {
-      "maxDuration": 30
+      "maxDuration": 120
     },
     "api/rokuse_diagnose.js": {
-      "maxDuration": 30
+      "maxDuration": 120
     }
   },
   "headers": [
