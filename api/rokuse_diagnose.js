@@ -838,33 +838,49 @@ function sanitizeDateWords(text, dateStr) {
 
 // ================================================================
 //  AI診断コメント生成: プロバイダ・フォールバック統括
-//  優先順位: ①ollama（自宅・OLLAMA_BASE_URL） → ②OpenRouter → ③Gemini
+//  フォールバック順は環境変数 LLM_FALLBACK_ORDER で指定可能（カンマ区切り）。
+//    例: "openrouter,ollama,gemini" / "gemini,ollama"
+//    未設定時のデフォルト順: ollama → openrouter → gemini
+//  順序リストに含まれないプロバイダは使用されない（意図的に外すことも可能）。
 //  各プロバイダは { text, model } または { error } を返す既存の契約を維持。
-//  未設定のプロバイダはスキップし、次の候補へフォールバックする。
-//  返却テキストの後処理（マークダウン除去・文末補完等）は各プロバイダ関数内で行う。
+//  接続情報が未設定のプロバイダは自動でスキップし、次の候補へフォールバックする。
 // ================================================================
+
+const DEFAULT_FALLBACK_ORDER = ["ollama", "openrouter", "gemini"];
+const VALID_PROVIDERS = new Set(DEFAULT_FALLBACK_ORDER);
+
+function resolveFallbackOrder() {
+  const raw = process.env.LLM_FALLBACK_ORDER;
+  if (!raw) return DEFAULT_FALLBACK_ORDER;
+  const order = raw.split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(s => VALID_PROVIDERS.has(s));
+  // 有効なプロバイダ名が1つも無い（誤設定）の場合はデフォルトにフォールバック
+  return order.length > 0 ? order : DEFAULT_FALLBACK_ORDER;
+}
 
 async function generateDiagnosisText(prompt, { OLLAMA_BASE_URL, OPENROUTER_API_KEY, GEMINI_API_KEY }) {
   const errors = [];
+  const order = resolveFallbackOrder();
 
-  if (OLLAMA_BASE_URL) {
-    const r = await callOllama(OLLAMA_BASE_URL, prompt);
-    if (!r.error) return r;
-    errors.push(r.error);
-    console.error("ollama失敗、OpenRouterへフォールバック:", r.error);
-  }
+  // 各プロバイダの実行内容（接続情報の有無チェックを含む）
+  const runners = {
+    ollama: async () => OLLAMA_BASE_URL ? callOllama(OLLAMA_BASE_URL, prompt) : null,
+    openrouter: async () => OPENROUTER_API_KEY ? callOpenRouter(OPENROUTER_API_KEY, prompt) : null,
+    gemini: async () => GEMINI_API_KEY ? callGemini(GEMINI_API_KEY, prompt) : null,
+  };
 
-  if (OPENROUTER_API_KEY) {
-    const r = await callOpenRouter(OPENROUTER_API_KEY, prompt);
-    if (!r.error) return r;
+  for (let i = 0; i < order.length; i++) {
+    const provider = order[i];
+    const runner = runners[provider];
+    if (!runner) continue;
+    const r = await runner();
+    if (r === null) continue; // 接続情報未設定 → スキップ
+    if (!r.error) return r;   // 成功
     errors.push(r.error);
-    console.error("OpenRouter失敗、Geminiへフォールバック:", r.error);
-  }
-
-  if (GEMINI_API_KEY) {
-    const r = await callGemini(GEMINI_API_KEY, prompt);
-    if (!r.error) return r;
-    errors.push(r.error);
+    const next = order.slice(i + 1).find(p => runners[p]);
+    if (next) console.error(`${provider}失敗、${next}へフォールバック:`, r.error);
+    else console.error(`${provider}失敗:`, r.error);
   }
 
   return { error: `AI診断コメントの生成に失敗しました: ${errors.join(" / ") || "利用可能なプロバイダがありません"}` };
@@ -1066,7 +1082,7 @@ function buildSoloPrompt({ name, birthA, genderA, rokuse, nenun, tsukinun, hiun,
 文字数: 400〜500字。必ず400字以上書くこと。
 禁止: マークダウン記法（#、##、**、*、-、・ など）を一切使わないこと。見出しや箇条書きも禁止。「以下に」「それでは」等の前置きも禁止。診断内容から直接書き始めること。
 日付表現: 「今日は」「本日は」は使わないこと。「この日は」と表現すること。
-言葉遣い: 専門用語は一切使わない。サイクル名（花・実・大殺界など）はそのまま使ってよいが、必ず意味を添えること。語尾は丁寧に「です」「ます」調とすること。断言しすぎずに提案するような言い回しを意識すること。
+言葉遣い: 専門用語は一切使わない。サイクル名（花・実・大殺界など）はそのまま使ってよいが、必ず意味を添えること。
 
 === 構成 ===
 [1] この日のコンディションを一言で。（1文）
