@@ -547,74 +547,88 @@ ${formatMeishiki(d.meishikiB, d.nameB)}
 //                      https://xxxx.example.com のようにhttp(s)込みで設定。末尾スラッシュ不要
 //   OLLAMA_MODEL       自宅Ollamaで使うモデル名（未設定時 "llama3.1"）
 //   OLLAMA_TIMEOUT_MS  自宅Ollamaの応答待ちタイムアウト（未設定時 8000ms。自宅サーバー停止時に長時間待たないため）
-//   OPENROUTER_API_KEY OpenRouterのAPIキー（第2段フォールバック用）
+//   OPENROUTER_API_KEY OpenRouterのAPIキー
 //   OPENROUTER_MODEL   OpenRouterで使うモデル名（未設定時 "meta-llama/llama-3.1-8b-instruct:free"）
-//   GEMINI_API_KEY     Google AI StudioのAPIキー（第3段フォールバック用）
+//   GEMINI_API_KEY     Google AI StudioのAPIキー
 //   GEMINI_MODEL       Geminiで使うモデル名（未設定時 "gemini-2.5-flash"）
+//   LLM_FALLBACK_ORDER  試行順をカンマ区切りで指定（例: "gemini,ollama,openrouter"）。
+//                      未設定時の既定は "ollama,openrouter,gemini"。
+//                      未知の名前は無視。設定済み（キー/URLあり）のプロバイダのみ実際に試行する。
 
 async function callAI(prompt) {
+  const DEFAULT_ORDER = ["ollama", "openrouter", "gemini"];
+
+  // 各プロバイダの定義。key/urlが無い（未設定）ものはavailable:falseで自動スキップ
   const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL;
-  const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.1";
-  const OLLAMA_TIMEOUT_MS = Number(process.env.OLLAMA_TIMEOUT_MS) || 8000;
   const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
-  const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta-llama/llama-3.1-8b-instruct:free";
   const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-  const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
+  const PROVIDERS = {
+    ollama: {
+      available: !!OLLAMA_BASE_URL,
+      build: () => ({
+        url: `${OLLAMA_BASE_URL.replace(/\/$/, "")}/v1/chat/completions`,
+        headers: { "Content-Type": "application/json" },
+        model: process.env.OLLAMA_MODEL || "llama3.1",
+        timeoutMs: Number(process.env.OLLAMA_TIMEOUT_MS) || 8000,
+        providerLabel: "ollama",
+        retryOn429: false, // 自宅サーバーにレート制限は通常無いため429リトライは行わない
+      }),
+    },
+    openrouter: {
+      available: !!OPENROUTER_API_KEY,
+      build: () => ({
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        },
+        model: process.env.OPENROUTER_MODEL || "meta-llama/llama-3.1-8b-instruct:free",
+        timeoutMs: 15000,
+        providerLabel: "openrouter",
+        retryOn429: true,
+      }),
+    },
+    gemini: {
+      available: !!GEMINI_API_KEY,
+      build: () => ({
+        // OpenAI互換エンドポイントを使用
+        url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GEMINI_API_KEY}`,
+        },
+        model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+        timeoutMs: 15000,
+        providerLabel: "gemini",
+        retryOn429: true,
+      }),
+    },
+  };
+
+  // 試行順の決定: LLM_FALLBACK_ORDER を優先。未知名は無視し、既定順で補完（漏れ防止）
+  const requested = (process.env.LLM_FALLBACK_ORDER || "")
+    .split(",")
+    .map(s => s.trim().toLowerCase())
+    .filter(name => PROVIDERS[name]);
+  const order = [...requested];
+  for (const name of DEFAULT_ORDER) {
+    if (!order.includes(name)) order.push(name);
+  }
 
   let lastError = null;
+  let anyAvailable = false;
 
-  // 1) 自宅Ollama（メイン）
-  if (OLLAMA_BASE_URL) {
-    const r = await callOpenAICompatible({
-      url: `${OLLAMA_BASE_URL.replace(/\/$/, "")}/v1/chat/completions`,
-      headers: { "Content-Type": "application/json" },
-      model: OLLAMA_MODEL,
-      prompt,
-      timeoutMs: OLLAMA_TIMEOUT_MS,
-      providerLabel: "ollama",
-      retryOn429: false, // 自宅サーバーにレート制限は通常無いため429リトライは行わない
-    });
+  for (const name of order) {
+    const p = PROVIDERS[name];
+    if (!p || !p.available) continue; // 未設定プロバイダはスキップ
+    anyAvailable = true;
+    const r = await callOpenAICompatible({ ...p.build(), prompt });
     if (r.text !== undefined) return r;
     lastError = r.error;
   }
 
-  // 2) OpenRouter（第2段フォールバック）
-  if (OPENROUTER_API_KEY) {
-    const r = await callOpenAICompatible({
-      url: "https://openrouter.ai/api/v1/chat/completions",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
-      },
-      model: OPENROUTER_MODEL,
-      prompt,
-      timeoutMs: 15000,
-      providerLabel: "openrouter",
-      retryOn429: true,
-    });
-    if (r.text !== undefined) return r;
-    lastError = r.error;
-  }
-
-  // 3) Gemini（第3段フォールバック。OpenAI互換エンドポイントを使用）
-  if (GEMINI_API_KEY) {
-    const r = await callOpenAICompatible({
-      url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${GEMINI_API_KEY}`,
-      },
-      model: GEMINI_MODEL,
-      prompt,
-      timeoutMs: 15000,
-      providerLabel: "gemini",
-      retryOn429: true,
-    });
-    if (r.text !== undefined) return r;
-    lastError = r.error;
-  }
-
-  if (!OLLAMA_BASE_URL && !OPENROUTER_API_KEY && !GEMINI_API_KEY) {
+  if (!anyAvailable) {
     return { error: "AI API未設定: OLLAMA_BASE_URL・OPENROUTER_API_KEY・GEMINI_API_KEYのいずれかを設定してください。" };
   }
   return { error: `AI APIエラー: ${lastError}。数分後に再試行してください。` };
