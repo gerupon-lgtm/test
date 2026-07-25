@@ -147,6 +147,7 @@ export default async function handler(req, res) {
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
+    baseCompatBonus: bonus,
     fortuneA, fortuneB, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
     luckyA, luckyB,
     baseDiagnosis, dailyDiagnosis,
