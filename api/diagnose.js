@@ -10,7 +10,7 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
   if (req.method !== "POST") return res.status(405).json({ error: "POSTのみ対応" });
 
-  const { nameA, birthA, genderA, timeA, nameB, birthB, genderB, timeB, targetDate, mode, timezone } = req.body;
+  const { nameA, birthA, genderA, timeA, nameB, birthB, genderB, timeB, targetDate, mode, timezone, placeA, placeB } = req.body;
   if (!birthA) return res.status(400).json({ error: "一人目の生年月日が不足" });
 
   const isSolo = mode === "solo" || !birthB;
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
   const isToday = judgeDateStr === todayStr;
 
   // ========== 一人目の計算 ==========
-  const meishikiA = buildMeishiki(birthA, timeA);
+  const meishikiA = await buildMeishiki(birthA, timeA, placeA, timezone);
   const bioA = calcBiorhythm(diffDays(new Date(birthA + "T00:00:00Z"), judgeDate));
   const dayPillar = calcDayPillar(judgeDateStr);
   const fortuneA = calcDailyFortune(meishikiA, dayPillar);
@@ -78,7 +78,7 @@ export default async function handler(req, res) {
   }
 
   // ========== 相性診断 ==========
-  const meishikiB = buildMeishiki(birthB, timeB);
+  const meishikiB = await buildMeishiki(birthB, timeB, placeB, timezone);
   const bioB = calcBiorhythm(diffDays(new Date(birthB + "T00:00:00Z"), judgeDate));
   const fortuneB = calcDailyFortune(meishikiB, dayPillar);
 
@@ -219,7 +219,95 @@ function pickMonthZoukan(branch, daysFromSetsuiri) {
   return table[table.length - 1][0]; // 範囲を超えたら本気
 }
 
-function buildMeishiki(dateStr, timeStr) {
+// ================================================================
+//  命式計算：命名サービスのエンジンを HTTP 参照（Phase B / B-2 方式）
+//  命名サービス側 /api/bazi が「本物の節入り（天文計算）＋出生地の経度・均時差
+//  補正＋早子時」まで反映した四柱・五行カウントを返す。通変星・十二運は
+//  返却された四柱の上でこちら側が再計算する（命名サービスは五行しか持たないため）。
+//  呼び出しに失敗したら旧ローカル計算（buildMeishikiLocal）へフォールバックし、
+//  命名サービス障害時でも診断が止まらないようにする。
+// ================================================================
+const NAMING_SERVICE_URL = (process.env.NAMING_SERVICE_URL || "https://naming-service-red.vercel.app").replace(/\/$/, "");
+const BAZI_TIMEOUT_MS = Number(process.env.BAZI_TIMEOUT_MS) || 6000;
+
+async function buildMeishiki(dateStr, timeStr, placeCode, timezone) {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), BAZI_TIMEOUT_MS);
+    let r;
+    try {
+      r = await fetch(`${NAMING_SERVICE_URL}/api/bazi`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          birthDate: dateStr,
+          birthTime: timeStr || undefined,
+          birthPlace: placeCode || undefined,
+          timezone,
+        }),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!r.ok) throw new Error(`bazi HTTP ${r.status}`);
+    const d = await r.json();
+    if (!d || !d.meishiki) throw new Error("bazi: 空レスポンス");
+    return enrichFromRemoteMeishiki(d.meishiki);
+  } catch (e) {
+    console.error("命名サービス /api/bazi 呼び出し失敗→ローカル計算にフォールバック:", e && e.message);
+    return buildMeishikiLocal(dateStr, timeStr);
+  }
+}
+
+// 命名サービスが返す命式（四柱＋五行カウント＋月令蔵干）に、通変星・十二運を
+// 付与して、既存コードが期待する buildMeishikiLocal と同一形状に整える。
+function enrichFromRemoteMeishiki(rm) {
+  const dayStem = STEMS.indexOf(rm.day.stem);
+  const yearStem = STEMS.indexOf(rm.year.stem);
+  const monthStem = STEMS.indexOf(rm.month.stem);
+  const yb = BRANCHES.indexOf(rm.year.branch);
+  const mb = BRANCHES.indexOf(rm.month.branch);
+  const db = BRANCHES.indexOf(rm.day.branch);
+
+  const yearTsuhen = getTsuhen(dayStem, yearStem);
+  const monthTsuhen = getTsuhen(dayStem, monthStem);
+  const monthZoukanIdx = rm.monthZoukan ? STEMS.indexOf(rm.monthZoukan) : -1;
+  const monthZoukanTsuhen = monthZoukanIdx >= 0 ? getTsuhen(dayStem, monthZoukanIdx) : null;
+
+  const yearJuniun = JUNIUNN[JUNIUN_TABLE[dayStem][yb]];
+  const monthJuniun = JUNIUNN[JUNIUN_TABLE[dayStem][mb]];
+  const dayJuniun = JUNIUNN[JUNIUN_TABLE[dayStem][db]];
+
+  let time = null;
+  if (rm.time) {
+    const tb = BRANCHES.indexOf(rm.time.branch);
+    const ts = STEMS.indexOf(rm.time.stem);
+    time = {
+      stem: rm.time.stem,
+      branch: rm.time.branch,
+      tsuhen: getTsuhen(dayStem, ts),
+      juniun: JUNIUNN[JUNIUN_TABLE[dayStem][tb]],
+    };
+  }
+
+  const dayElement = rm.dayElement; // "wood" | "fire" | ...
+  return {
+    year: { stem: rm.year.stem, branch: rm.year.branch, tsuhen: yearTsuhen, juniun: yearJuniun },
+    month: { stem: rm.month.stem, branch: rm.month.branch, tsuhen: monthTsuhen, juniun: monthJuniun,
+             zoukan: rm.monthZoukan || null, zoukanTsuhen: monthZoukanTsuhen },
+    day: { stem: rm.day.stem, branch: rm.day.branch, juniun: dayJuniun },
+    time,
+    dayElement,
+    dayElementJP: JP[dayElement],
+    gogyoCount: rm.gogyoCount,
+    monthTsuhen,
+    monthZoukan: rm.monthZoukan || null,
+    monthZoukanTsuhen,
+  };
+}
+
+function buildMeishikiLocal(dateStr, timeStr) {
   const d = new Date(dateStr + "T00:00:00Z");
   const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
 
