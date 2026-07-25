@@ -59,7 +59,7 @@ export default async function handler(req, res) {
     let weeklyData = [], monthlyData = [], bioGraph = null;
     try {
       weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "solo");
-      monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "solo", null, null, -14);
+      monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 31, "solo");
       bioGraph = buildBioGraphData(birthA, judgeDateStr, 30);
     } catch (e) {
       console.error("Range data error:", e);
@@ -135,7 +135,7 @@ export default async function handler(req, res) {
   let weeklyData = [], monthlyData = [], bioGraph = null;
   try {
     weeklyData = buildRangeData(meishikiA, birthA, judgeDateStr, 7, "pair", meishikiB, birthB);
-    monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 30, "pair", meishikiB, birthB, -14);
+    monthlyData = buildRangeData(meishikiA, birthA, judgeDateStr, 31, "pair", meishikiB, birthB);
     bioGraph = buildBioGraphData(birthA, judgeDateStr, 30, birthB);
   } catch (e) {
     console.error("Range data error:", e);
@@ -928,13 +928,13 @@ function sanitizeDateWords(text, dateStr) {
 // ================================================================
 //  週間・月間データ生成
 // ================================================================
-function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, birthB, startOffset = 0) {
+function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, birthB) {
   const result = [];
   const baseMs = new Date(baseDateStr + "T00:00:00Z").getTime();
   const birthAMs = new Date(birthA + "T00:00:00Z").getTime();
   const birthBMs = birthB ? new Date(birthB + "T00:00:00Z").getTime() : 0;
   for (let i = 0; i < days; i++) {
-    const dMs = baseMs + (i + startOffset) * 86400000;
+    const dMs = baseMs + i * 86400000;
     const d = new Date(dMs);
     const ds = d.toISOString().slice(0, 10);
     const dp = calcDayPillar(ds);
