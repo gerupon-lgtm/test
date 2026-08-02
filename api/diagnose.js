@@ -166,8 +166,8 @@ const BRANCHES = ["子","丑","寅","卯","辰","巳","午","未","申","酉","�
 const STEM_ELEMENT = {"甲":"wood","乙":"wood","丙":"fire","丁":"fire","戊":"earth","己":"earth","庚":"metal","辛":"metal","壬":"water","癸":"water"};
 const JP = {wood:"木",fire:"火",earth:"土",metal:"金",water:"水"};
 
-// 通変星名
-const TSUHEN_NAMES = ["比肩","劫財","食神","傷官","偏財","正財","偏官","正官","偏印","印綬"];
+// 通変星名は getTsuhen() の TSUHEN_BY_RELATION（五行関係×陰陽の2次元表）で持つ。
+// 「日干からの差分1本のフラット配列」は陰干日主で破綻するため、置かないこと。
 
 // 十二運名
 const JUNIUNN = ["長生","沐浴","冠帯","建禄","帝旺","衰","病","死","墓","絶","胎","養"];
@@ -488,9 +488,41 @@ function calcLucky(meishiki) {
   };
 }
 
+/**
+ * 通変星（日干と他の天干の関係）。
+ *
+ * 【重要・バグ修正 v3.b.2】
+ * 素朴に `TSUHEN_NAMES[(other - day) % 10]` とするのは **日干が陽干のときだけ**
+ * 成立する。通変星は「五行の関係（比和／我生／我剋／剋我／生我）」と
+ * 「日干と相手の陰陽が同じか異なるか」の2軸で決まるため、日干が陰干
+ * （乙・丁・己・辛・癸）だと陰陽が反転し、差分テーブルは10通り中5通り
+ * （＝相手が陽干になる奇数diffの側）が誤った星名になる。
+ *   例) 日干=己 のとき 甲→誤「正財」/正「正官」、壬→誤「傷官」/正「正財」
+ * 通変星は monthTsuhen（相性判定）・日運スコア・運勢補正にも流れるため、
+ * 陰干生まれの結果全体が狂う。**差分テーブル方式に戻さないこと。**
+ *
+ * 修正方針: 差分は使わず、五行関係＋陰陽から素直に導出する。
+ */
+const TSUHEN_BY_RELATION = [
+  // [陰陽が同じ, 陰陽が異なる]
+  ["比肩", "劫財"], // 0: 比和（相手＝日干と同じ五行）
+  ["食神", "傷官"], // 1: 我生（日干が生む）
+  ["偏財", "正財"], // 2: 我剋（日干が剋す）
+  ["偏官", "正官"], // 3: 剋我（日干を剋す）
+  ["偏印", "印綬"], // 4: 生我（日干を生む）
+];
+
+const WUXING_CYCLE = ["wood", "fire", "earth", "metal", "water"];
+
 function getTsuhen(dayStemIdx, otherStemIdx) {
-  const diff = ((otherStemIdx - dayStemIdx) % 10 + 10) % 10;
-  return TSUHEN_NAMES[diff];
+  const dayEl = WUXING_CYCLE.indexOf(STEM_ELEMENT[STEMS[dayStemIdx]]);
+  const otherEl = WUXING_CYCLE.indexOf(STEM_ELEMENT[STEMS[otherStemIdx]]);
+  // 相生の並び順（木→火→土→金→水→木）での距離が、そのまま関係の種別になる。
+  //   0=比和 / 1=我生 / 2=我剋 / 3=剋我 / 4=生我
+  const relation = ((otherEl - dayEl) % 5 + 5) % 5;
+  // 十干は偶数index=陽干、奇数index=陰干。
+  const samePolarity = (dayStemIdx % 2) === (otherStemIdx % 2);
+  return TSUHEN_BY_RELATION[relation][samePolarity ? 0 : 1];
 }
 
 function getTsuhenCompatibility(tsuhenA, tsuhenB) {
