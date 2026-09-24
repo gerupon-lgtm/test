@@ -979,9 +979,9 @@ async function callOpenRouter(apiKey, prompt) {
 
 async function callGemini(apiKey, prompt) {
   const MODELS = [
-    "gemini-2.5-flash",        // 第1候補: 最新安定版・高品質
-    "gemini-2.5-flash-lite",   // 第2候補: 軽量・高速
-    "gemini-2.0-flash-lite",   // 第3候補: フォールバック（2026/6/1まで）
+    "gemini-3.6-flash",        // 第1候補: 最新安定版・高品質
+    "gemini-3.1-flash-lite",   // 第2候補: 軽量・高速
+    "gemini-2.5-flash-lite",   // 第3候補: フォールバック（2026/6/1まで）
   ];
   const MAX_RETRIES = 1;
   let lastError = null;
