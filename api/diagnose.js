@@ -46,10 +46,12 @@ export default async function handler(req, res) {
 
     // 5運勢スコア
     const fiveScores = calcFiveFortuneScores(fortuneA, meishikiA, bioA, genderA);
+    // 命式スコア（生まれ持った素質）。overall には混ぜず別枠で返す。
+    const meishikiScoreA = calcMeishikiScore(meishikiA);
 
     const prompt = buildSoloPrompt({
       name: nameA || "あなた", birthA, genderA, timeA, meishiki: meishikiA,
-      fortune: fortuneA, dayPillar, isToday, fiveScores,
+      fortune: fortuneA, dayPillar, isToday, fiveScores, meishikiScore: meishikiScoreA,
       physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
     });
     const result = await callAI(prompt);
@@ -69,7 +71,9 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
-      fiveScores,
+      // 総合スコアの内訳を画面に出せるようにする（四柱推命40%が見えないため）
+      bioBase, shichuScore: fortuneA.fortuneScore,
+      fiveScores, meishikiScore: meishikiScoreA,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
       lucky: luckyA,
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
@@ -146,6 +150,9 @@ export default async function handler(req, res) {
 
   return res.status(200).json({
     mode: "pair", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
+    // 総合スコアの内訳（相性は bioScore に四柱推命由来のボーナスを足す形）
+    bioBase: bioScore, shichuScore: Math.round(avgFortune),
+    meishikiScoreA: calcMeishikiScore(meishikiA), meishikiScoreB: calcMeishikiScore(meishikiB),
     meishikiA, meishikiB, gogyoRelation: gogyoRel, tsuhenCompat: tsuhenCompat.label,
     baseCompatBonus: bonus,
     fortuneA, fortuneB, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
@@ -190,6 +197,12 @@ const JUNIUN_TABLE = [
 
 // 節入り日テーブル（簡易版：各月のおおよその節入り日）
 const SETSUIRI = [0,6,4,6,5,6,7,7,8,8,8,7,7]; // 月1-12の節入り日（index0はダミー）
+
+// 地支の五行（本気ベース）。地支の文字そのものをキーにする。
+const BRANCH_ELEMENT_MAP = {
+  "子":"water","丑":"earth","寅":"wood","卯":"wood","辰":"earth","巳":"fire",
+  "午":"fire","未":"earth","申":"metal","酉":"metal","戌":"earth","亥":"water",
+};
 
 // 月律分野蔵干テーブル（地支 → [[天干, 日数], ...] 余気→中気→本気の順）
 // 節入りからの経過日数で作用する蔵干（月支の分野蔵干）を決定する
@@ -254,7 +267,9 @@ async function buildMeishiki(dateStr, timeStr, placeCode, timezone) {
     if (!r.ok) throw new Error(`bazi HTTP ${r.status}`);
     const d = await r.json();
     if (!d || !d.meishiki) throw new Error("bazi: 空レスポンス");
-    return enrichFromRemoteMeishiki(d.meishiki);
+    // strength / targetElements は命名サービス v2.6.0 以降のフィールド。
+    // 旧バージョンが返ってきても落ちないよう、無ければローカルで算出する。
+    return enrichFromRemoteMeishiki(d.meishiki, d.strength, d.targetElements);
   } catch (e) {
     console.error("命名サービス /api/bazi 呼び出し失敗→ローカル計算にフォールバック:", e && e.message);
     return buildMeishikiLocal(dateStr, timeStr);
@@ -263,7 +278,7 @@ async function buildMeishiki(dateStr, timeStr, placeCode, timezone) {
 
 // 命名サービスが返す命式（四柱＋五行カウント＋月令蔵干）に、通変星・十二運を
 // 付与して、既存コードが期待する buildMeishikiLocal と同一形状に整える。
-function enrichFromRemoteMeishiki(rm) {
+function enrichFromRemoteMeishiki(rm, remoteStrength, remoteTargets) {
   const dayStem = STEMS.indexOf(rm.day.stem);
   const yearStem = STEMS.indexOf(rm.year.stem);
   const monthStem = STEMS.indexOf(rm.month.stem);
@@ -293,6 +308,22 @@ function enrichFromRemoteMeishiki(rm) {
   }
 
   const dayElement = rm.dayElement; // "wood" | "fire" | ...
+
+  // 身強／身弱と用神は命名サービスの判定を正とする（エンジン一元化）。
+  // 旧版が返ってこない場合のみローカル簡易判定にフォールバックする。
+  const strength = (remoteStrength && remoteStrength.strength)
+    ? remoteStrength
+    : judgeStrengthLocal({
+        dayElement,
+        monthBranch: rm.month.branch,
+        monthZoukan: rm.monthZoukan || null,
+        branches: [rm.year.branch, rm.day.branch, ...(rm.time ? [rm.time.branch] : [])],
+        stems: [rm.year.stem, rm.month.stem, ...(rm.time ? [rm.time.stem] : [])],
+      });
+  const targetElements = (Array.isArray(remoteTargets) && remoteTargets.length)
+    ? remoteTargets
+    : decideTargetElementsLocal(dayElement, strength.strength, rm.gogyoCount);
+
   return {
     year: { stem: rm.year.stem, branch: rm.year.branch, tsuhen: yearTsuhen, juniun: yearJuniun },
     month: { stem: rm.month.stem, branch: rm.month.branch, tsuhen: monthTsuhen, juniun: monthJuniun,
@@ -305,6 +336,8 @@ function enrichFromRemoteMeishiki(rm) {
     monthTsuhen,
     monthZoukan: rm.monthZoukan || null,
     monthZoukanTsuhen,
+    strength,
+    targetElements,
   };
 }
 
@@ -388,14 +421,25 @@ function buildMeishikiLocal(dateStr, timeStr) {
   const gogyoCount = { wood:0, fire:0, earth:0, metal:0, water:0 };
   elements.forEach(s => gogyoCount[STEM_ELEMENT[STEMS[s]]]++);
   // 地支の五行も加算
-  const BRANCH_ELEMENT = ["water","earth","wood","wood","earth","fire","fire","earth","metal","metal","earth","water"];
-  branches.forEach(b => gogyoCount[BRANCH_ELEMENT[b]]++);
+  branches.forEach(b => gogyoCount[BRANCH_ELEMENT_MAP[BRANCHES[b]]]++);
   // 月令（月支の分野蔵干）の五行を加算：命式で最も強く作用するため反映する
   if (monthZoukanStem !== null) gogyoCount[STEM_ELEMENT[monthZoukanStem]]++;
 
   const dayElement = STEM_ELEMENT[STEMS[dayStem]];
 
+  // 身強／身弱と用神（日運の採点に使う）
+  const strength = judgeStrengthLocal({
+    dayElement,
+    monthBranch: BRANCHES[monthBranchIdx],
+    monthZoukan: monthZoukanStem,
+    branches: [BRANCHES[yearBranch], BRANCHES[dayBranch], ...(timeBranch !== null ? [BRANCHES[timeBranch]] : [])],
+    stems: [STEMS[yearStem], STEMS[monthStem], ...(timeStem !== null ? [STEMS[timeStem]] : [])],
+  });
+  const targetElements = decideTargetElementsLocal(dayElement, strength.strength, gogyoCount);
+
   return {
+    strength,
+    targetElements,
     year: { stem: STEMS[yearStem], branch: BRANCHES[yearBranch], tsuhen: yearTsuhen, juniun: yearJuniun },
     month: { stem: STEMS[monthStem], branch: BRANCHES[monthBranchIdx], tsuhen: monthTsuhen, juniun: monthJuniun,
              zoukan: monthZoukanStem, zoukanTsuhen: monthZoukanTsuhen },
@@ -487,6 +531,116 @@ function calcLucky(meishiki) {
     note: "日干の" + jp[dayElement] + "を活かし、不足しがちな" + jp[weakElement] + "を補う要素です。"
   };
 }
+
+// ================================================================
+//  身強／身弱 と 用神（ローカル簡易版）
+//
+//  【正は命名サービス側】api/_lib/bazi/strength.ts・wuxing.ts。
+//  ここは /api/bazi が落ちたとき用のフォールバックなので、点数の刻みと
+//  閾値は命名サービスと同じ値に揃えてある。向こうを変えたらここも合わせること。
+//
+//  【用神論】補うべき五行は「最も少ない五行」ではなく用神で決める。
+//    身弱 → 印星（日干を生む）・比劫（日干と同じ）
+//    身強 → 食傷（日干が生む）・財（日干が剋す）・官（日干を剋す）
+// ================================================================
+const STRENGTH_CONFIG = {
+  monthSameElement: 6, monthSupports: 4, monthDrains: -3,
+  branchSameElement: 2, branchSupports: 1, branchDrains: -1,
+  stemSameElement: 2, stemSupports: 1, stemDrains: -1,
+  monthZoukanSupports: 2,
+  strongThreshold: 6, weakThreshold: 1,
+};
+
+function elGenerates(a, b) { return WUXING_CYCLE[(WUXING_CYCLE.indexOf(a) + 1) % 5] === b; }
+/** 日干を生む五行（印星）。 */
+function elThatGenerates(t) { return WUXING_CYCLE[(WUXING_CYCLE.indexOf(t) + 4) % 5]; }
+/** 日干が生む五行（食傷）。 */
+function elGeneratedBy(t) { return WUXING_CYCLE[(WUXING_CYCLE.indexOf(t) + 1) % 5]; }
+/** 日干が剋す五行（財）。 */
+function elControlledBy(t) { return WUXING_CYCLE[(WUXING_CYCLE.indexOf(t) + 2) % 5]; }
+/** 日干を剋す五行（官殺）。 */
+function elThatControls(t) { return WUXING_CYCLE[(WUXING_CYCLE.indexOf(t) + 3) % 5]; }
+
+function supportKind(element, dayElement) {
+  if (element === dayElement) return "same";
+  if (elGenerates(element, dayElement)) return "supports";
+  return "drains";
+}
+
+/** 地支に含まれる五行（蔵干ベース）。通根の判定に使う。 */
+function branchElementsOf(branch) {
+  const table = ZOUKAN_TABLE[branch] || [];
+  return [...new Set(table.map(([stem]) => STEM_ELEMENT[stem]))];
+}
+
+function judgeStrengthLocal({ dayElement, monthBranch, monthZoukan, branches, stems }) {
+  const c = STRENGTH_CONFIG;
+  let score = 0;
+
+  // 1. 月令（判定の中心）
+  const rootedInMonth = branchElementsOf(monthBranch).includes(dayElement);
+  const monthKind = supportKind(BRANCH_ELEMENT_MAP[monthBranch], dayElement);
+  if (monthKind === "same") score += c.monthSameElement;
+  else if (monthKind === "supports") score += c.monthSupports;
+  else score += c.monthDrains;
+  if (monthZoukan) {
+    const zk = supportKind(STEM_ELEMENT[monthZoukan], dayElement);
+    if (zk === "same" || zk === "supports") score += c.monthZoukanSupports;
+  }
+
+  // 2. 月支以外の地支への通根
+  for (const b of branches) {
+    const kind = supportKind(BRANCH_ELEMENT_MAP[b], dayElement);
+    if (kind === "same") score += c.branchSameElement;
+    else if (kind === "supports") score += c.branchSupports;
+    else score += c.branchDrains;
+  }
+
+  // 3. 日干以外の天干による支え
+  for (const s of stems) {
+    const kind = supportKind(STEM_ELEMENT[s], dayElement);
+    if (kind === "same") score += c.stemSameElement;
+    else if (kind === "supports") score += c.stemSupports;
+    else score += c.stemDrains;
+  }
+
+  let strength;
+  if (score >= c.strongThreshold) strength = "strong";
+  else if (score <= c.weakThreshold) strength = "weak";
+  else strength = "neutral";
+
+  const summary = strength === "strong"
+    ? "生まれ持ったエネルギーが強めのタイプです。"
+    : strength === "weak"
+    ? "生まれ持ったエネルギーが穏やかなタイプです。"
+    : "生まれ持ったエネルギーのバランスが取れたタイプです。";
+
+  return { strength, score, rootedInMonth, summary };
+}
+
+function decideTargetElementsLocal(dayElement, strength, gogyoCount) {
+  const list = [];
+  if (strength === "weak") {
+    list.push(elThatGenerates(dayElement)); // 印星
+    list.push(dayElement);                  // 比劫
+  } else if (strength === "strong") {
+    list.push(elGeneratedBy(dayElement));   // 食傷
+    list.push(elControlledBy(dayElement));  // 財
+    list.push(elThatControls(dayElement));  // 官
+  } else {
+    // 中和: 最も少ない五行を穏やかに補う
+    let best = WUXING_CYCLE[0];
+    for (const e of WUXING_CYCLE) {
+      if ((gogyoCount?.[e] ?? 0) < (gogyoCount?.[best] ?? 0)) best = e;
+    }
+    if (best === dayElement) best = elThatGenerates(dayElement);
+    list.push(best);
+    list.push(elThatGenerates(dayElement));
+  }
+  return [...new Set(list)];
+}
+
+const STRENGTH_LABEL = { strong: "身強", neutral: "中和", weak: "身弱" };
 
 /**
  * 通変星（日干と他の天干の関係）。
@@ -586,8 +740,14 @@ ${formatMeishiki(d.meishiki, d.name)}
 日柱: ${f.dayPillarStr}（${f.dayElement}の日）
 日運の通変星: ${f.tsuhen}
 日運の十二運: ${f.juniun}
-五行の影響: ${f.gogyoEffect}
+五行の影響: ${f.gogyoEffect}${f.yojinLabel ? "／" + f.yojinLabel : ""}
 日運スコア: ${f.fortuneScore}点
+
+【生まれ持った素質（命式そのもの。日によって変わらない）】
+エネルギーの強さ: ${d.meishikiScore?.strengthLabel ?? "不明"}（${d.meishikiScore?.strengthSummary ?? ""}）
+命式スコア: ${d.meishikiScore?.score ?? "-"}点
+この人にとって追い風になる五行: ${(d.meishikiScore?.targetElementsJP || []).join("・") || "不明"}
+命式に無い五行: ${(d.meishikiScore?.missingElementsJP || []).join("・") || "なし"}
 
 バイオリズム（0%=最低〜100%=最高）:
 身体${d.physical}% 感情${d.emotional}% 知性${d.intellectual}% 総合${d.overallScore}点
@@ -855,26 +1015,40 @@ function calcDailyFortune(meishiki, dayPillar) {
   const juniinScores = { "帝旺":100, "建禄":95, "冠帯":85, "長生":80, "沐浴":70, "養":65, "胎":55, "衰":45, "病":35, "墓":25, "死":15, "絶":10 };
   const energyScore = juniinScores[juniun] ?? 50;
 
-  // 五行の相性: 指定日の五行が本人の日干五行にどう作用するか
+  // 五行の作用: 指定日の五行が本人の日干五行にどう作用するか（説明用の文言）
   const dayElem = dayPillar.element;
   const selfElem = meishiki.dayElement;
   let gogyoEffect = "";
-  let gogyoBonus = 0;
-  const cycle = ["wood","fire","earth","metal","water"];
+  const cycle = WUXING_CYCLE;
   const iDay = cycle.indexOf(dayElem), iSelf = cycle.indexOf(selfElem);
-  if (dayElem === selfElem) { gogyoEffect = "比和（同じ" + JP[dayElem] + "の気が巡り、自分らしさが増す日）"; gogyoBonus = 8; }
-  else if (cycle[(iDay+1)%5] === selfElem) { gogyoEffect = "相生（" + JP[dayElem] + "が" + JP[selfElem] + "を生む追い風の日）"; gogyoBonus = 10; }
-  else if (cycle[(iSelf+1)%5] === dayElem) { gogyoEffect = "泄気（" + JP[selfElem] + "が" + JP[dayElem] + "を生み出すため消耗しやすい日）"; gogyoBonus = -3; }
-  else if (cycle[(iDay+2)%5] === selfElem) { gogyoEffect = "相剋（" + JP[dayElem] + "が" + JP[selfElem] + "を剋す試練の日）"; gogyoBonus = -6; }
-  else if (cycle[(iSelf+2)%5] === dayElem) { gogyoEffect = "克出（" + JP[selfElem] + "が" + JP[dayElem] + "を剋す力を使う活動的な日）"; gogyoBonus = 3; }
-  else { gogyoEffect = JP[dayElem] + "の気が巡る日"; gogyoBonus = 0; }
+  if (dayElem === selfElem) gogyoEffect = "比和（同じ" + JP[dayElem] + "の気が巡る日）";
+  else if (cycle[(iDay+1)%5] === selfElem) gogyoEffect = "相生（" + JP[dayElem] + "が" + JP[selfElem] + "を生む日）";
+  else if (cycle[(iSelf+1)%5] === dayElem) gogyoEffect = "泄気（" + JP[selfElem] + "が" + JP[dayElem] + "を生み出す日）";
+  else if (cycle[(iDay+2)%5] === selfElem) gogyoEffect = "相剋（" + JP[dayElem] + "が" + JP[selfElem] + "を剋す日）";
+  else if (cycle[(iSelf+2)%5] === dayElem) gogyoEffect = "克出（" + JP[selfElem] + "が" + JP[dayElem] + "を剋す日）";
+  else gogyoEffect = JP[dayElem] + "の気が巡る日";
 
   // 通変星の日運スコア（0-100）
   const tsuhenScores = { "比肩":55, "劫財":40, "食神":85, "傷官":45, "偏財":70, "正財":80, "偏官":35, "正官":65, "偏印":50, "印綬":75 };
   const tsuhenScore = tsuhenScores[tsuhen] ?? 50;
 
-  // 五行相性スコア（0-100）
-  const gogyoScore = Math.max(0, Math.min(100, 50 + gogyoBonus * 5));
+  // --- 五行スコアは「用神が巡っているか」で採点する（v3.c.0〜）--------------
+  //
+  // 【重要】単純な相生・相剋で採点してはいけない。吉凶は身強／身弱で逆転する。
+  //   身強の人が印星（自分を生む五行）の日を迎えれば過剰で重くなり、
+  //   身弱の人にとっては同じ日が支えになる。相生＝常に吉、ではない。
+  // そこで命式から決めた用神（身弱→印星・比劫／身強→食傷・財・官）に
+  // 指定日の五行が当たるかで採点する。用神は優先順位つきリストで、
+  // 先頭ほど効きが強い。用神に入らない五行は忌神寄りとして低めに置く。
+  const targets = Array.isArray(meishiki.targetElements) ? meishiki.targetElements : [];
+  const targetIdx = targets.indexOf(dayElem);
+  let gogyoScore, yojinLabel;
+  if (targetIdx === 0)      { gogyoScore = 90; yojinLabel = "用神（最も効く五行）が巡る日"; }
+  else if (targetIdx > 0)   { gogyoScore = 75; yojinLabel = "喜神（次に効く五行）が巡る日"; }
+  else if (dayElem === selfElem) { gogyoScore = 50; yojinLabel = "日干と同じ五行が巡る日"; }
+  else                      { gogyoScore = 35; yojinLabel = "忌神寄りの五行が巡る日"; }
+  // 用神が決まらない（命式取得に失敗した等）ときは中立に倒す
+  if (targets.length === 0) { gogyoScore = 50; yojinLabel = ""; }
 
   // 総合日運スコア (0-100): 十二運50% + 通変星35% + 五行15%
   const fortuneScore = Math.min(100, Math.max(0, Math.round(
@@ -888,7 +1062,67 @@ function calcDailyFortune(meishiki, dayPillar) {
     juniun,
     energyScore,
     gogyoEffect,
+    yojinLabel,
+    gogyoScore,
     fortuneScore,
+  };
+}
+
+// ================================================================
+//  命式スコア（生まれ持った素質。0〜100）
+//
+//  日運（その日の干支×日干。毎日変わる）とは別軸で、命式そのものの
+//  整い方を採点する。**総合スコアには混ぜない**（別枠表示）。
+//  総合スコアは「その日の運勢」であり、毎日変わらない値を混ぜると
+//  日々の変動が薄まって日運の意味が読み取れなくなるため。
+// ================================================================
+const MEISHIKI_SCORE_WEIGHTS = {
+  juniun: 0.35,    // 日柱の十二運＝生まれ持ったエネルギーの量
+  gogyoSpread: 0.30, // 五行がどれだけ揃っているか（偏りの少なさ）
+  balance: 0.25,   // 身強／身弱の極端さ（中和に近いほど高い）
+  rooted: 0.10,    // 月令に通根しているか（命式の芯の強さ）
+};
+
+function calcMeishikiScore(meishiki) {
+  const juniinScores = { "帝旺":100, "建禄":95, "冠帯":85, "長生":80, "沐浴":70, "養":65, "胎":55, "衰":45, "病":35, "墓":25, "死":15, "絶":10 };
+  const juniunScore = juniinScores[meishiki.day.juniun] ?? 50;
+
+  // 五行の揃い具合: 5種そろえば満点。欠けるほど下がる。
+  const gc = meishiki.gogyoCount || {};
+  const kinds = WUXING_CYCLE.filter(e => (gc[e] ?? 0) > 0).length;
+  const spreadScore = { 0:20, 1:20, 2:40, 3:65, 4:85, 5:100 }[kinds] ?? 50;
+
+  // 強弱バランス: 命名サービスの閾値（身弱<=1 / 身強>=6）の中央 3.5 を中和の芯とし、
+  // そこから離れるほど下げる。極端な身強・身弱は扱いが難しいという見立て。
+  const sc = meishiki.strength?.score ?? 3.5;
+  const balanceScore = Math.max(20, Math.round(100 - Math.abs(sc - 3.5) * 9));
+
+  const rootedScore = meishiki.strength?.rootedInMonth ? 100 : 55;
+
+  const w = MEISHIKI_SCORE_WEIGHTS;
+  const score = Math.min(100, Math.max(0, Math.round(
+    juniunScore * w.juniun + spreadScore * w.gogyoSpread +
+    balanceScore * w.balance + rootedScore * w.rooted
+  )));
+
+  const missing = WUXING_CYCLE.filter(e => (gc[e] ?? 0) === 0).map(e => JP[e]);
+  const strengthLabel = STRENGTH_LABEL[meishiki.strength?.strength] || "中和";
+  const targetsJP = (meishiki.targetElements || []).map(e => JP[e]);
+
+  return {
+    score,
+    strength: meishiki.strength?.strength || "neutral",
+    strengthLabel,
+    strengthSummary: meishiki.strength?.summary || "",
+    rootedInMonth: !!meishiki.strength?.rootedInMonth,
+    targetElementsJP: targetsJP,
+    missingElementsJP: missing,
+    breakdown: {
+      juniun: juniunScore,
+      gogyoSpread: spreadScore,
+      balance: balanceScore,
+      rooted: rootedScore,
+    },
   };
 }
 
