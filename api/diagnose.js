@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     const emo = Math.round(((bioA.emotional + 1) / 2) * 100);
     const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
     const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
-    // 3.f.0〜: 四柱推命スコア（年3：月3：日4）とバイオリズムを半々で合わせる（六星占術アプリと同じ形）
+    // 4.0.0〜: 四柱推命スコア（年3：月3：日4）とバイオリズムを半々で合わせる（六星占術アプリと同じ形）
     const shichu = calcShichuFortune(meishikiA, judgeDateStr, fortuneA);
     const overall = calcOverall(shichu.score, bioBase);
     // 大運（点数には混ぜない。表示専用）
@@ -75,7 +75,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
-      // 総合スコアの内訳を画面に出せるようにする。shichuScore は 3.f.0〜 年運・月運・日運の合成
+      // 総合スコアの内訳を画面に出せるようにする。shichuScore は 4.0.0〜 年運・月運・日運の合成
       bioBase, shichuScore: shichu.score, shichu,
       fiveScores, meishikiScore: meishikiScoreA, daiun: daiunA,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
@@ -1011,7 +1011,7 @@ function pillarFromIdx(stemIdx, branchIdx) {
   return { stemIdx, branchIdx, stem: STEMS[stemIdx], branch: BRANCHES[branchIdx], element: STEM_ELEMENT[STEMS[stemIdx]], elementJP: JP[STEM_ELEMENT[STEMS[stemIdx]]] };
 }
 
-// 判定日の年柱・月柱（流年・流月。3.f.0〜）。
+// 判定日の年柱・月柱（流年・流月。4.0.0〜）。
 // 年は立春（2/4）、月は節入り（SETSUIRI の固定日）で切り替わる。規則は buildMeishikiLocal() と同じ。
 // ※ 節入り当日の前後は天文計算と1日ずれることがある（固定日テーブルの限界）。
 function calcYearMonthPillars(dateStr) {
@@ -1029,7 +1029,7 @@ function calcYearMonthPillars(dateStr) {
   return { year: pillarFromIdx(yearStem, yearIdx % 12), month: pillarFromIdx(monthStem, monthBranch) };
 }
 
-// 四柱推命スコア＝年運・月運・日運の合成（3.f.0〜。六星占術アプリの「六星スコア」と同じ形）。
+// 四柱推命スコア＝年運・月運・日運の合成（4.0.0〜。六星占術アプリの「六星スコア」と同じ形）。
 // 年運・月運は日運と同じ calcDailyFortune() で、判定日の年柱・月柱を渡して出す（配点表も共通なので平均は50）。
 const SHICHU_SCORE_WEIGHTS = { year: 0.3, month: 0.3, day: 0.4 };
 // 総合＝四柱推命スコア×0.5 ＋ バイオリズム×0.5（六星占術アプリと同じ）
@@ -1053,7 +1053,7 @@ function calcOverall(shichuScore, bioBase) {
 }
 
 // ================================================================
-//  大運（10年ごとの運気の流れ。3.f.0〜）
+//  大運（10年ごとの運気の流れ。4.0.0〜）
 //  点数には混ぜない。「追い風の五行（用神）が巡る10年か」を表示するためだけに使う。
 // ================================================================
 const DAIUN_COUNT = 8;
