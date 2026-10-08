@@ -42,7 +42,11 @@ export default async function handler(req, res) {
     const emo = Math.round(((bioA.emotional + 1) / 2) * 100);
     const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
     const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
-    const overall = Math.min(100, Math.max(0, Math.round(bioBase * 0.6 + fortuneA.fortuneScore * 0.4)));
+    // 3.f.0〜: 四柱推命スコア（年3：月3：日4）とバイオリズムを半々で合わせる（六星占術アプリと同じ形）
+    const shichu = calcShichuFortune(meishikiA, judgeDateStr, fortuneA);
+    const overall = calcOverall(shichu.score, bioBase);
+    // 大運（点数には混ぜない。表示専用）
+    const daiunA = calcDaiun(meishikiA, birthA, genderA, judgeDateStr);
 
     // 5運勢スコア
     const fiveScores = calcFiveFortuneScores(fortuneA, meishikiA, bioA, genderA, overall);
@@ -51,7 +55,7 @@ export default async function handler(req, res) {
 
     const prompt = buildSoloPrompt({
       name: nameA || "あなた", birthA, genderA, timeA, meishiki: meishikiA,
-      fortune: fortuneA, dayPillar, isToday, fiveScores, meishikiScore: meishikiScoreA,
+      fortune: fortuneA, dayPillar, isToday, fiveScores, meishikiScore: meishikiScoreA, shichu,
       physical: phy, emotional: emo, intellectual: int_, overallScore: overall, judgeDateStr,
     });
     const result = await callAI(prompt);
@@ -71,9 +75,9 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       mode: "solo", overallScore: overall, physical: phy, emotional: emo, intellectual: int_,
-      // 総合スコアの内訳を画面に出せるようにする（四柱推命40%が見えないため）
-      bioBase, shichuScore: fortuneA.fortuneScore,
-      fiveScores, meishikiScore: meishikiScoreA,
+      // 総合スコアの内訳を画面に出せるようにする。shichuScore は 3.f.0〜 年運・月運・日運の合成
+      bioBase, shichuScore: shichu.score, shichu,
+      fiveScores, meishikiScore: meishikiScoreA, daiun: daiunA,
       meishikiA, fortuneA, dayPillar: { stem: dayPillar.stem, branch: dayPillar.branch, element: dayPillar.elementJP },
       lucky: luckyA,
       diagnosis: diagText, usedModel: result.model, targetDate: judgeDateStr,
@@ -742,6 +746,7 @@ ${formatMeishiki(d.meishiki, d.name)}
 日運の十二運: ${f.juniun}
 五行の影響: ${f.gogyoEffect}${f.yojinLabel ? "／" + f.yojinLabel : ""}
 日運スコア: ${f.fortuneScore}点
+${d.shichu ? `年運（${d.shichu.year.pillar}）${d.shichu.year.score}点・月運（${d.shichu.month.pillar}）${d.shichu.month.score}点 → 四柱推命スコア ${d.shichu.score}点（年3割・月3割・日4割）` : ""}
 
 【生まれ持った素質（命式そのもの。日によって変わらない）】
 エネルギーの強さ: ${d.meishikiScore?.strengthLabel ?? "不明"}（${d.meishikiScore?.strengthSummary ?? ""}）
@@ -1001,6 +1006,138 @@ function calcDayPillar(dateStr) {
   return { stemIdx, branchIdx, stem: STEMS[stemIdx], branch: BRANCHES[branchIdx], element: STEM_ELEMENT[STEMS[stemIdx]], elementJP: JP[STEM_ELEMENT[STEMS[stemIdx]]] };
 }
 
+// 干支インデックスから柱オブジェクトを作る（calcDayPillar と同じ形。calcDailyFortune にそのまま渡せる）
+function pillarFromIdx(stemIdx, branchIdx) {
+  return { stemIdx, branchIdx, stem: STEMS[stemIdx], branch: BRANCHES[branchIdx], element: STEM_ELEMENT[STEMS[stemIdx]], elementJP: JP[STEM_ELEMENT[STEMS[stemIdx]]] };
+}
+
+// 判定日の年柱・月柱（流年・流月。3.f.0〜）。
+// 年は立春（2/4）、月は節入り（SETSUIRI の固定日）で切り替わる。規則は buildMeishikiLocal() と同じ。
+// ※ 節入り当日の前後は天文計算と1日ずれることがある（固定日テーブルの限界）。
+function calcYearMonthPillars(dateStr) {
+  const d = new Date(dateStr + "T00:00:00Z");
+  const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1, day = d.getUTCDate();
+  let yearForPillar = y;
+  if (m < 2 || (m === 2 && day < 4)) yearForPillar--;
+  const yearIdx = ((yearForPillar - 4) % 60 + 60) % 60;
+  const yearStem = yearIdx % 10;
+  let solarMonth = m;
+  if (day < (SETSUIRI[m] || 6)) solarMonth--;
+  if (solarMonth <= 0) solarMonth += 12;
+  const monthBranch = solarMonth % 12;
+  const monthStem = ((yearStem % 5) * 2 + 2 + (monthBranch - 2 + 12) % 12) % 10; // 五虎遁
+  return { year: pillarFromIdx(yearStem, yearIdx % 12), month: pillarFromIdx(monthStem, monthBranch) };
+}
+
+// 四柱推命スコア＝年運・月運・日運の合成（3.f.0〜。六星占術アプリの「六星スコア」と同じ形）。
+// 年運・月運は日運と同じ calcDailyFortune() で、判定日の年柱・月柱を渡して出す（配点表も共通なので平均は50）。
+const SHICHU_SCORE_WEIGHTS = { year: 0.3, month: 0.3, day: 0.4 };
+// 総合＝四柱推命スコア×0.5 ＋ バイオリズム×0.5（六星占術アプリと同じ）
+const OVERALL_WEIGHTS = { shichu: 0.5, bio: 0.5 };
+
+function calcShichuFortune(meishiki, dateStr, dayFortune) {
+  const { year, month } = calcYearMonthPillars(dateStr);
+  const fy = calcDailyFortune(meishiki, year);
+  const fm = calcDailyFortune(meishiki, month);
+  const fd = dayFortune || calcDailyFortune(meishiki, calcDayPillar(dateStr));
+  const w = SHICHU_SCORE_WEIGHTS;
+  const score = Math.min(100, Math.max(0, Math.round(
+    fy.fortuneScore * w.year + fm.fortuneScore * w.month + fd.fortuneScore * w.day)));
+  const brief = (f) => ({ pillar: f.dayPillarStr, tsuhen: f.tsuhen, juniun: f.juniun, score: f.fortuneScore });
+  return { score, year: brief(fy), month: brief(fm), day: brief(fd) };
+}
+
+function calcOverall(shichuScore, bioBase) {
+  return Math.min(100, Math.max(0, Math.round(
+    shichuScore * OVERALL_WEIGHTS.shichu + bioBase * OVERALL_WEIGHTS.bio)));
+}
+
+// ================================================================
+//  大運（10年ごとの運気の流れ。3.f.0〜）
+//  点数には混ぜない。「追い風の五行（用神）が巡る10年か」を表示するためだけに使う。
+// ================================================================
+const DAIUN_COUNT = 8;
+// 段階の出現率（400人の実測）: big 22% / good 48% / steady 30%。
+// good まで「追い風」と強く言うと7割が該当して特別感が無くなるので、ボーナス期として目立たせるのは big だけにする。
+const DAIUN_LEVELS = {
+  big:    { label: "ボーナス期", text: "追い風になる五行が天干・地支の両方に巡る、特別な10年です。" },
+  good:   { label: "おだやかな追い風", text: "追い風になる五行が、少し巡る10年です。" },
+  steady: { label: "力を蓄える時期", text: "地力を蓄えて、次の流れに備える10年です。" },
+};
+
+// 生まれから「次の節入り」（順行）または「前の節入り」（逆行）までの日数
+function daysToSetsuiri(birthStr, forward) {
+  const b = new Date(birthStr + "T00:00:00Z");
+  const y = b.getUTCFullYear(), m = b.getUTCMonth(); // m: 0-11
+  const setsu = (yy, mm) => { // mm: 0-11（はみ出しは Date.UTC が繰り上げる）
+    const real = new Date(Date.UTC(yy, mm, 1));
+    return Date.UTC(real.getUTCFullYear(), real.getUTCMonth(), SETSUIRI[real.getUTCMonth() + 1] || 6);
+  };
+  const thisSetsu = setsu(y, m);
+  let target;
+  if (forward) target = b.getTime() < thisSetsu ? thisSetsu : setsu(y, m + 1);
+  else target = b.getTime() >= thisSetsu ? thisSetsu : setsu(y, m - 1);
+  return Math.abs(target - b.getTime()) / 86400000;
+}
+
+// 満年齢
+function ageAt(birthStr, dateStr) {
+  const b = new Date(birthStr + "T00:00:00Z"), d = new Date(dateStr + "T00:00:00Z");
+  let age = d.getUTCFullYear() - b.getUTCFullYear();
+  if (d.getUTCMonth() < b.getUTCMonth() || (d.getUTCMonth() === b.getUTCMonth() && d.getUTCDate() < b.getUTCDate())) age--;
+  return age;
+}
+
+function calcDaiun(meishiki, birthStr, gender, judgeDateStr) {
+  // 順行・逆行は性別で決まる。未選択のときは補完せず（「男性とみなす」等をしない）、案内だけ返す
+  if (gender !== "male" && gender !== "female") return { available: false, reason: "gender" };
+  const yearStemIdx = STEMS.indexOf(meishiki.year.stem);
+  const dayStemIdx = STEMS.indexOf(meishiki.day.stem);
+  const monthStemIdx = STEMS.indexOf(meishiki.month.stem);
+  const monthBranchIdx = BRANCHES.indexOf(meishiki.month.branch);
+  if (yearStemIdx < 0 || dayStemIdx < 0 || monthStemIdx < 0 || monthBranchIdx < 0) return { available: false, reason: "meishiki" };
+
+  // 陽年生まれの男性・陰年生まれの女性は順行、それ以外は逆行
+  const forward = (gender === "male") === (yearStemIdx % 2 === 0);
+  // 起運: 節入りまでの日数 ÷ 3 = 歳（3日で1年）。固定日テーブルなので前後1年ほどずれうる
+  const startAge = Math.max(1, Math.round(daysToSetsuiri(birthStr, forward) / 3));
+
+  // 月柱の60干支インデックス
+  let monthIdx60 = 0;
+  for (let i = 0; i < 60; i++) if (i % 10 === monthStemIdx && i % 12 === monthBranchIdx) { monthIdx60 = i; break; }
+
+  const targets = Array.isArray(meishiki.targetElements) ? meishiki.targetElements : [];
+  const list = [];
+  for (let k = 1; k <= DAIUN_COUNT; k++) {
+    const idx = ((monthIdx60 + (forward ? k : -k)) % 60 + 60) % 60;
+    const stemIdx = idx % 10, branchIdx = idx % 12;
+    const stem = STEMS[stemIdx], branch = BRANCHES[branchIdx];
+    const stemEl = STEM_ELEMENT[stem], branchEl = BRANCH_ELEMENT_MAP[branch];
+    const hits = (targets.includes(stemEl) ? 1 : 0) + (targets.includes(branchEl) ? 1 : 0);
+    const level = hits >= 2 ? "big" : hits === 1 ? "good" : "steady";
+    const yojinJP = [...new Set([stemEl, branchEl].filter(e => targets.includes(e)))].map(e => JP[e]);
+    list.push({
+      pillar: stem + branch,
+      ageFrom: startAge + (k - 1) * 10, ageTo: startAge + k * 10 - 1,
+      tsuhen: getTsuhen(dayStemIdx, stemIdx),
+      juniun: JUNIUNN[JUNIUN_TABLE[dayStemIdx][branchIdx]],
+      elementsJP: JP[stemEl] + "・" + JP[branchEl],
+      yojinJP, level, label: DAIUN_LEVELS[level].label, text: DAIUN_LEVELS[level].text,
+    });
+  }
+  const age = ageAt(birthStr, judgeDateStr);
+  const currentIdx = list.findIndex(x => age >= x.ageFrom && age <= x.ageTo);
+  const current = currentIdx >= 0 ? list[currentIdx] : null;
+  // 次に来るボーナス期（今がボーナス期でも、その次を案内する）
+  const from = currentIdx >= 0 ? currentIdx + 1 : list.findIndex(x => x.ageFrom > age);
+  const nextBonus = from >= 0 ? list.slice(from).find(x => x.level === "big") || null : null;
+  return {
+    available: true, direction: forward ? "順行" : "逆行", startAge, age,
+    beforeStart: age < startAge, current, nextBonus, list,
+    targetElementsJP: targets.map(e => JP[e]),
+  };
+}
+
 function calcDailyFortune(meishiki, dayPillar) {
   // 日干のインデックスを逆引き
   const dayStemIdx = STEMS.indexOf(meishiki.day.stem);
@@ -1254,7 +1391,9 @@ function buildRangeData(meishikiA, birthA, baseDateStr, days, mode, meishikiB, b
       const emo = Math.round(((bioA.emotional + 1) / 2) * 100);
       const int_ = Math.round(((bioA.intellectual + 1) / 2) * 100);
       const bioBase = Math.round(phy * 0.3 + emo * 0.4 + int_ * 0.3);
-      entry.score = Math.min(100, Math.max(0, Math.round(bioBase * 0.6 + fA.fortuneScore * 0.4)));
+      const shichu = calcShichuFortune(meishikiA, ds, fA);
+      entry.score = calcOverall(shichu.score, bioBase);
+      entry.shichu = shichu.score;
       entry.fortune = fA.fortuneScore;
       entry.tsuhen = fA.tsuhen;
       entry.juniun = fA.juniun;
