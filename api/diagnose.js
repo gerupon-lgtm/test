@@ -745,7 +745,7 @@ ${formatMeishiki(d.meishiki, d.name)}
 
 【生まれ持った素質（命式そのもの。日によって変わらない）】
 エネルギーの強さ: ${d.meishikiScore?.strengthLabel ?? "不明"}（${d.meishikiScore?.strengthSummary ?? ""}）
-命式スコア: ${d.meishikiScore?.score ?? "-"}点
+命式の整い方: ${d.meishikiScore?.stars ?? "-"}（${d.meishikiScore?.starLabel ?? ""}）※点数では伝えないこと
 この人にとって追い風になる五行: ${(d.meishikiScore?.targetElementsJP || []).join("・") || "不明"}
 命式に無い五行: ${(d.meishikiScore?.missingElementsJP || []).join("・") || "なし"}
 
@@ -1012,7 +1012,9 @@ function calcDailyFortune(meishiki, dayPillar) {
   const juniun = JUNIUNN[JUNIUN_TABLE[dayStemIdx][dayPillar.branchIdx]];
 
   // 十二運のエネルギースコア（0-100）
-  const juniinScores = { "帝旺":100, "建禄":95, "冠帯":85, "長生":80, "沐浴":70, "養":65, "胎":55, "衰":45, "病":35, "墓":25, "死":15, "絶":10 };
+  // 3.d.0〜: 12段階の平均が 50 になるよう等間隔に割り直した（中立＝50）。強弱の順序は不変。
+  // ※ calcMeishikiScore() の同名テーブルは旧値のまま（命式は星表示で、閾値が旧分布基準のため）
+  const juniinScores = { "帝旺":95, "建禄":87, "冠帯":79, "長生":71, "沐浴":62, "養":54, "胎":46, "衰":38, "病":29, "墓":21, "死":13, "絶":5 };
   const energyScore = juniinScores[juniun] ?? 50;
 
   // 五行の作用: 指定日の五行が本人の日干五行にどう作用するか（説明用の文言）
@@ -1029,7 +1031,8 @@ function calcDailyFortune(meishiki, dayPillar) {
   else gogyoEffect = JP[dayElem] + "の気が巡る日";
 
   // 通変星の日運スコア（0-100）
-  const tsuhenScores = { "比肩":55, "劫財":40, "食神":85, "傷官":45, "偏財":70, "正財":80, "偏官":35, "正官":65, "偏印":50, "印綬":75 };
+  // 3.d.0〜: 10種の平均が 50 になるよう等差（初項77・公差-6）で付け直した。吉凶の順序は不変。
+  const tsuhenScores = { "比肩":47, "劫財":29, "食神":77, "傷官":35, "偏財":59, "正財":71, "偏官":23, "正官":53, "偏印":41, "印綬":65 };
   const tsuhenScore = tsuhenScores[tsuhen] ?? 50;
 
   // --- 五行スコアは「用神が巡っているか」で採点する（v3.c.0〜）--------------
@@ -1040,13 +1043,15 @@ function calcDailyFortune(meishiki, dayPillar) {
   // そこで命式から決めた用神（身弱→印星・比劫／身強→食傷・財・官）に
   // 指定日の五行が当たるかで採点する。用神は優先順位つきリストで、
   // 先頭ほど効きが強い。用神に入らない五行は忌神寄りとして低めに置く。
+  // 3.d.0〜: 出現頻度込みの平均が 50 になるよう全段を下げた（90/75/50/35 → 80/65/45/30）。
+  //   値は tools/score-distribution.mjs で実測して決めた。順序は不変。
   const targets = Array.isArray(meishiki.targetElements) ? meishiki.targetElements : [];
   const targetIdx = targets.indexOf(dayElem);
   let gogyoScore, yojinLabel;
-  if (targetIdx === 0)      { gogyoScore = 90; yojinLabel = "用神（最も効く五行）が巡る日"; }
-  else if (targetIdx > 0)   { gogyoScore = 75; yojinLabel = "喜神（次に効く五行）が巡る日"; }
-  else if (dayElem === selfElem) { gogyoScore = 50; yojinLabel = "日干と同じ五行が巡る日"; }
-  else                      { gogyoScore = 35; yojinLabel = "忌神寄りの五行が巡る日"; }
+  if (targetIdx === 0)      { gogyoScore = 80; yojinLabel = "用神（最も効く五行）が巡る日"; }
+  else if (targetIdx > 0)   { gogyoScore = 65; yojinLabel = "喜神（次に効く五行）が巡る日"; }
+  else if (dayElem === selfElem) { gogyoScore = 45; yojinLabel = "日干と同じ五行が巡る日"; }
+  else                      { gogyoScore = 30; yojinLabel = "忌神寄りの五行が巡る日"; }
   // 用神が決まらない（命式取得に失敗した等）ときは中立に倒す
   if (targets.length === 0) { gogyoScore = 50; yojinLabel = ""; }
 
@@ -1083,6 +1088,13 @@ const MEISHIKI_SCORE_WEIGHTS = {
   rooted: 0.10,    // 月令に通根しているか（命式の芯の強さ）
 };
 
+// 命式スコア → 星。上から順に評価し、最初に min を満たした段階を採る。
+const MEISHIKI_STAR_LEVELS = [
+  { min: 78, level: 3, label: "しっかり整った配置" },
+  { min: 60, level: 2, label: "整った配置" },
+  { min: 0,  level: 1, label: "個性的な配置" },
+];
+
 function calcMeishikiScore(meishiki) {
   const juniinScores = { "帝旺":100, "建禄":95, "冠帯":85, "長生":80, "沐浴":70, "養":65, "胎":55, "衰":45, "病":35, "墓":25, "死":15, "絶":10 };
   const juniunScore = juniinScores[meishiki.day.juniun] ?? 50;
@@ -1105,12 +1117,19 @@ function calcMeishikiScore(meishiki) {
     balanceScore * w.balance + rootedScore * w.rooted
   )));
 
+  // 画面には点数でなく星を出す（3.d.0〜）。閾値は 3.c.0 実測の分位点（中央68 / p10=49 / p90=84）基準。
+  // 命式は本人そのものなので「該当なし」の ☆☆☆ は作らず3段階。どの段階も肯定的な言葉にする。
+  const star = MEISHIKI_STAR_LEVELS.find(lv => score >= lv.min);
+
   const missing = WUXING_CYCLE.filter(e => (gc[e] ?? 0) === 0).map(e => JP[e]);
   const strengthLabel = STRENGTH_LABEL[meishiki.strength?.strength] || "中和";
   const targetsJP = (meishiki.targetElements || []).map(e => JP[e]);
 
   return {
-    score,
+    score,                       // 内部値。画面には出さない（デバッグ・閾値調整用）
+    stars: "★".repeat(star.level) + "☆".repeat(3 - star.level),
+    starLevel: star.level,
+    starLabel: star.label,
     strength: meishiki.strength?.strength || "neutral",
     strengthLabel,
     strengthSummary: meishiki.strength?.summary || "",
