@@ -45,7 +45,7 @@ export default async function handler(req, res) {
     const overall = Math.min(100, Math.max(0, Math.round(bioBase * 0.6 + fortuneA.fortuneScore * 0.4)));
 
     // 5運勢スコア
-    const fiveScores = calcFiveFortuneScores(fortuneA, meishikiA, bioA, genderA);
+    const fiveScores = calcFiveFortuneScores(fortuneA, meishikiA, bioA, genderA, overall);
     // 命式スコア（生まれ持った素質）。overall には混ぜず別枠で返す。
     const meishikiScoreA = calcMeishikiScore(meishikiA);
 
@@ -1148,9 +1148,41 @@ function calcMeishikiScore(meishiki) {
 // ================================================================
 //  5運勢スコア計算（金運・恋愛運・仕事運・健康運・対人運）
 // ================================================================
-function calcFiveFortuneScores(fortune, meishiki, biorhythm, gender) {
+// 通変星→各運勢への補正値（金運・恋愛・仕事・健康・対人）。
+// 作者の意図（どの星がどの分野に効くか）を残すため表は手書きのまま持ち、
+// 使うときに calcFiveFortuneScores() 側で「星そのものの良し悪し」と「分野ごとの偏り」を差し引く。
+const TSUHEN_MAP = {
+  //            金運  恋愛  仕事  健康  対人
+  "比肩":   [  -5,   -5,    5,    5,   -5 ],
+  "劫財":   [ -10,    0,    0,   -5,  -10 ],
+  "食神":   [  10,   15,    5,   10,   15 ],
+  "傷官":   [   5,    5,   -5,   -5,   -5 ],
+  "偏財":   [  20,   10,   10,    0,   10 ],
+  "正財":   [  15,   15,   15,    5,    5 ],
+  "偏官":   [  -5,   -5,   10,  -10,   -5 ],
+  "正官":   [   5,   10,   20,    0,   10 ],
+  "偏印":   [   0,   -5,    5,   -5,    0 ],
+  "印綬":   [   5,    5,   15,    5,   10 ],
+};
+// 列（分野）ごとの平均。差し引かないと、健康運が常に低め・仕事運が常に高めに出る（実測で健康運の中央値44）。
+const TSUHEN_FIELD_MEAN = [0, 1, 2, 3, 4].map(j =>
+  Object.values(TSUHEN_MAP).reduce((a, r) => a + r[j], 0) / Object.keys(TSUHEN_MAP).length);
+const TSUHEN_GRAND_MEAN = TSUHEN_FIELD_MEAN.reduce((a, v) => a + v, 0) / 5;
+
+// 5運勢のバイオリズム寄与の係数。対応するバイオリズムが5分野の平均より 10 高いと +3。
+const FIVE_BIO_WEIGHT = 0.3;
+
+// 3.e.0〜: 5運勢は「総合スコアを分野ごとに振り分けたもの」。
+//   運勢 = 総合 + 分野ごとの上下（5分野の上下の合計は 0）
+// なので 5運勢の平均は総合と一致する（0〜100 で切れたときだけわずかにずれる）。
+// 以前は 十二運×0.3 + バイオリズム1本×0.3 + 20 + 補正 という総合とは別の式で、
+// 同じ材料から出ているのに総合との関係が説明できなかった。
+// 上下の材料:
+//   - 通変星: その日の星がどの分野に効くか（星そのものの良し悪しは日運経由で総合に入っているので差し引く）
+//   - バイオリズム: 金運・仕事運=知性、恋愛運・対人運=感情、健康運=身体 が他より高いか低いか
+//   - 命式: 金の五行が多い→金運、水が多い→対人運、性別と財星・官星→恋愛運
+function calcFiveFortuneScores(fortune, meishiki, biorhythm, gender, overall) {
   const t = fortune.tsuhen;
-  const e = fortune.energyScore;
   const bio = biorhythm; // { physical, emotional, intellectual } (-1〜1のsin値)
 
   // バイオリズムを0-100にスケーリング
@@ -1158,42 +1190,30 @@ function calcFiveFortuneScores(fortune, meishiki, biorhythm, gender) {
   const bioEmo = Math.round(((bio.emotional + 1) / 2) * 100);
   const bioInt = Math.round(((bio.intellectual + 1) / 2) * 100);
 
-  // 通変星→各運勢への影響マップ（-15〜+20の補正値）
-  const TSUHEN_MAP = {
-    //            金運  恋愛  仕事  健康  対人
-    "比肩":   [  -5,   -5,    5,    5,   -5 ],
-    "劫財":   [ -10,    0,    0,   -5,  -10 ],
-    "食神":   [  10,   15,    5,   10,   15 ],
-    "傷官":   [   5,    5,   -5,   -5,   -5 ],
-    "偏財":   [  20,   10,   10,    0,   10 ],
-    "正財":   [  15,   15,   15,    5,    5 ],
-    "偏官":   [  -5,   -5,   10,  -10,   -5 ],
-    "正官":   [   5,   10,   20,    0,   10 ],
-    "偏印":   [   0,   -5,    5,   -5,    0 ],
-    "印綬":   [   5,    5,   15,    5,   10 ],
-  };
+  // 通変星: 行の平均（星の良し悪し）と列の平均（分野の偏り）を差し引いた「分野への振り分け」だけを使う
+  const row = TSUHEN_MAP[t] || [0, 0, 0, 0, 0];
+  const rowMean = row.reduce((a, v) => a + v, 0) / 5;
+  const tsuhenAdj = row.map((v, j) => TSUHEN_MAP[t] ? v - rowMean - TSUHEN_FIELD_MEAN[j] + TSUHEN_GRAND_MEAN : 0);
 
-  const tm = TSUHEN_MAP[t] || [0, 0, 0, 0, 0];
+  // バイオリズム: 分野に対応する周期
+  const fieldBio = [bioInt, bioEmo, bioInt, bioPhy, bioEmo];
+  const fieldBioMean = fieldBio.reduce((a, v) => a + v, 0) / 5;
 
-  // 性別による恋愛運の追加補正
+  // 命式・性別の補正
   let loveBonusGender = 0;
   if (gender === "male" && (t === "正財" || t === "偏財")) loveBonusGender = 5;
   if (gender === "female" && (t === "正官" || t === "偏官")) loveBonusGender = 5;
-
-  // 五行バランスの偏り補正（金の数→金運、水の数→対人運に微補正）
   const gc = meishiki.gogyoCount;
   const metalBonus = Math.min(gc.metal * 3, 9);
   const waterBonus = Math.min(gc.water * 2, 6);
+  const extra = [metalBonus, loveBonusGender, 0, 0, waterBonus];
 
-  // 各運勢スコア = 基礎（十二運×0.3 + バイオリズム×0.3）+ 通変星補正 + 固有補正
-  const base = (n) => Math.round(e * 0.3 + n * 0.3 + 20);
-  const clamp = (v) => Math.min(100, Math.max(5, v));
-
-  const money    = clamp(base(bioInt) + tm[0] + metalBonus);
-  const love     = clamp(base(bioEmo) + tm[1] + loveBonusGender);
-  const work     = clamp(base(bioInt) + tm[2]);
-  const health   = clamp(base(bioPhy) + tm[3]);
-  const social   = clamp(base(bioEmo) + tm[4] + waterBonus);
+  // 上下の合計を 0 に揃える（＝5運勢の平均が総合になる）
+  const adj = [0, 1, 2, 3, 4].map(j =>
+    tsuhenAdj[j] + (fieldBio[j] - fieldBioMean) * FIVE_BIO_WEIGHT + extra[j]);
+  const adjMean = adj.reduce((a, v) => a + v, 0) / 5;
+  const clamp = (v) => Math.min(100, Math.max(0, Math.round(v)));
+  const [money, love, work, health, social] = adj.map(a => clamp(overall + a - adjMean));
 
   return { money, love, work, health, social };
 }
